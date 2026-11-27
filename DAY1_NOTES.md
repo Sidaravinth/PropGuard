@@ -10,6 +10,7 @@ Requires **Node 24+**. It uses the built-in `node:sqlite`, so there is no native
 npm install
 cp .env.example .env            # set GEMINI_API_KEY (free: https://aistudio.google.com/apikey)
 
+npm run migrate                 # create/upgrade the schema only (idempotent; seed also does this)
 npm run seed                    # reset DB, seed structured data, ingest the 5 leases via the LLM, run policy on all tickets
 npm run seed -- --no-ingest     # same without the LLM (no API key needed; tickets fail closed with LEASE_NOT_FOUND)
 npm run dev                     # API on http://localhost:3001, Swagger UI at /docs
@@ -151,7 +152,13 @@ POST /api/tickets/:id/policy-check  GET  /api/tickets/:id/policy-evaluations
 
 ## Tests
 
-`npm test` runs 95 tests in under 3 seconds. They need no network access and no API key.
+`npm test` runs 107 tests in under 4 seconds. They need no network access and no API key.
+
+- `schema.test.ts` covers:
+  - every table exists, and the declared foreign keys
+  - foreign key enforcement at runtime, CHECK constraints, and cascade deletes from `source_documents`
+  - expired, active, upcoming and unknown lease states, plus the `EXPIRED` and `IN_NOTICE_WINDOW` flags
+  - the seed scenario: 5 leases (including a PDF) with 30/45/60-day notice periods, matching tenants and units, at least 2 quote mismatches over 10%, and the overdue tenant
 
 - `policyEngine.test.ts` covers:
   - every threshold boundary ($200, $200.01, $201, $1,000, $1,000.01, $1,001)
