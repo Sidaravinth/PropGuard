@@ -247,12 +247,13 @@ export function verifyExtraction(extraction: LeaseExtraction, pages: string[]): 
  * reading a lease back from the database, so both always agree.
  */
 export function computeGaps(
-  fields: { field: string; status: FieldStatus; note: string | null }[],
+  fields: { field: string; status: FieldStatus | "corrected"; note: string | null }[],
   clauses: { clauseType: ClauseType; verified: boolean }[],
 ): DataGap[] {
   const gaps: DataGap[] = [];
   for (const f of fields) {
-    if (f.status !== "extracted") gaps.push({ field: f.field, status: f.status, reason: f.note ?? f.status });
+    // "corrected" = a human supplied or confirmed the value; it no longer needs review.
+    if (f.status === "missing" || f.status === "needs_review") gaps.push({ field: f.field, status: f.status, reason: f.note ?? f.status });
   }
   for (const type of REQUIRED_CLAUSES) {
     if (!clauses.some((c) => c.clauseType === type && c.verified)) {

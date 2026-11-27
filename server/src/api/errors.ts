@@ -1,6 +1,8 @@
 import type { ErrorRequestHandler, RequestHandler } from "express";
 import multer from "multer";
 import { z } from "zod";
+import { AuthError } from "../auth/authService.js";
+import { StoredFileMissingError } from "../storage/documentStore.js";
 import { UnsupportedDocumentError } from "../extraction/documentText.js";
 import { LlmUnavailableError } from "../extraction/extractor.js";
 import { PolicyInputError } from "../policy/policyEngine.js";
@@ -30,9 +32,13 @@ export function parseOr400<T extends z.ZodType>(schema: T, data: unknown, where 
 
 export const unknownRoute: RequestHandler = (req, _res, next) => next(new ApiError(404, "NOT_FOUND", `No route for ${req.method} ${req.path}`));
 
+const AUTH_STATUS: Record<AuthError["code"], number> = { INVALID_CREDENTIALS: 401, WEAK_PASSWORD: 400, INVALID_INPUT: 400 };
+
 export const errorHandler: ErrorRequestHandler = (err, _req, res, _next) => {
   let e: ApiError;
   if (err instanceof ApiError) e = err;
+  else if (err instanceof AuthError) e = new ApiError(AUTH_STATUS[err.code], err.code, err.message);
+  else if (err instanceof StoredFileMissingError) e = new ApiError(410, "FILE_MISSING", "The original file is missing from document storage");
   else if (err instanceof NotFoundError) e = new ApiError(404, "NOT_FOUND", err.message);
   else if (err instanceof UnsupportedDocumentError) e = new ApiError(422, "UNSUPPORTED_DOCUMENT", err.message);
   else if (err instanceof PolicyInputError) e = new ApiError(422, "POLICY_INPUT_INVALID", err.message);

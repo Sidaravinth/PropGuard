@@ -7,7 +7,11 @@ import type { LlmCall } from "../extraction/extractor.js";
 import { ingestLeaseDocument } from "../extraction/ingest.js";
 import { ClauseType } from "../extraction/leaseSchema.js";
 import { runTicketPolicyCheck } from "../services/policyService.js";
+import { requirePermission } from "../auth/middleware.js";
 import { ApiError, notFound, parseOr400 } from "./errors.js";
+import { leaseDetail, leaseListItem } from "./leaseViews.js";
+import * as records from "../services/records.js";
+import { ticketDetail, ticketListItem } from "./ticketViews.js";
 
 const IntId = z.coerce.number().int().positive();
 /** Money in the API is integer cents (no floats). */
@@ -32,12 +36,16 @@ export function createRouter(db: DB, deps: { llm: () => LlmCall }): Router {
     res.json({ ok: true });
   });
 
+  // Everything below needs a signed-in user; writes additionally need their specific permission.
+  r.use(requirePermission("records.read"));
+
   // --- units ---------------------------------------------------------------
-  r.get("/units", (_req, res) => {
-    res.json({ data: repo.listUnits(db) });
+  r.get("/units", (req, res) => {
+    const { property_id } = parseOr400(z.object({ property_id: z.coerce.number().int().positive().optional() }), req.query, "query");
+    res.json({ data: records.listUnitsDetailed(db, { property_id }) });
   });
   r.get("/units/:id", (req, res) => {
-    const unit = repo.getUnit(db, req.params.id);
+    const unit = records.unitDetail(db, req.params.id);
     if (!unit) throw notFound(`Unit ${req.params.id}`);
     res.json({ data: unit });
   });
@@ -45,12 +53,12 @@ export function createRouter(db: DB, deps: { llm: () => LlmCall }): Router {
   // --- tenants -------------------------------------------------------------
   r.get("/tenants", (req, res) => {
     const { status } = parseOr400(z.object({ status: z.string().optional() }), req.query, "query");
-    res.json({ data: repo.listTenants(db, status) });
+    res.json({ data: records.listTenantsDetailed(db, { status }) });
   });
   r.get("/tenants/:id", (req, res) => {
-    const tenant = repo.getTenant(db, req.params.id);
-    if (!tenant) throw notFound(`Tenant ${req.params.id}`);
-    res.json({ data: { ...tenant, unpaid_balance_cents: repo.unpaidBalanceCents(db, tenant.tenant_id) } });
+    const profile = records.tenantProfile(db, req.params.id);
+    if (!profile) throw notFound(`Tenant ${req.params.id}`);
+    res.json({ data: profile });
   });
   r.get("/tenants/:id/ledger", (req, res) => {
     const tenant = repo.getTenant(db, req.params.id);
@@ -60,10 +68,10 @@ export function createRouter(db: DB, deps: { llm: () => LlmCall }): Router {
 
   // --- leases --------------------------------------------------------------
   r.get("/leases", (_req, res) => {
-    res.json({ data: repo.listLeases(db).map((l) => repo.leaseSummary(db, l)) });
+    res.json({ data: repo.listLeases(db).map((l) => leaseListItem(db, l)) });
   });
 
-  r.post("/leases/ingest", upload.single("file"), async (req, res) => {
+  r.post("/leases/ingest", requirePermission("records.write"), upload.single("file"), async (req, res) => {
     if (!req.file) throw new ApiError(400, "FILE_REQUIRED", 'Upload the lease as multipart/form-data field "file" (.pdf or .txt)');
     const docName = req.file.originalname.replace(/[^\w.\- ]+/g, "_");
     const result = await ingestLeaseDocument(db, { docName, bytes: req.file.buffer }, deps.llm());
@@ -82,13 +90,7 @@ export function createRouter(db: DB, deps: { llm: () => LlmCall }): Router {
     const id = parseOr400(IntId, req.params.id, "lease id");
     const lease = repo.getLeaseRow(db, id);
     if (!lease) throw notFound(`Lease ${id}`);
-    res.json({
-      data: {
-        ...repo.leaseSummary(db, lease),
-        fields: repo.getFieldSources(db, id),
-        clauses: repo.getClauses(db, id),
-      },
-    });
+    res.json({ data: leaseDetail(db, id) });
   });
 
   r.get("/leases/:id/clauses", (req, res) => {
@@ -104,18 +106,16 @@ export function createRouter(db: DB, deps: { llm: () => LlmCall }): Router {
   // --- maintenance tickets ---------------------------------------------------
   r.get("/tickets", (req, res) => {
     const q = parseOr400(z.object({ status: z.string().optional(), unit_id: z.string().optional() }), req.query, "query");
-    res.json({ data: repo.listTickets(db, q) });
+    res.json({ data: repo.listTickets(db, q).map((t) => ticketListItem(db, t)) });
   });
 
   r.get("/tickets/:id", (req, res) => {
     const id = parseOr400(IntId, req.params.id, "ticket id");
-    const ticket = repo.getTicket(db, id);
-    if (!ticket) throw notFound(`Ticket ${id}`);
-    const latest = repo.listPolicyEvaluations(db, id)[0] ?? null;
-    res.json({ data: { ...ticket, latest_policy_evaluation: latest } });
+    if (!repo.getTicket(db, id)) throw notFound(`Ticket ${id}`);
+    res.json({ data: ticketDetail(db, id) });
   });
 
-  r.post("/tickets", (req, res) => {
+  r.post("/tickets", requirePermission("records.write"), (req, res) => {
     const body = parseOr400(NewTicketBody, req.body, "ticket");
     const unit = repo.getUnit(db, body.unit_id);
     if (!unit) throw new ApiError(422, "UNKNOWN_UNIT", `Unit ${body.unit_id} does not exist`);
@@ -137,7 +137,7 @@ export function createRouter(db: DB, deps: { llm: () => LlmCall }): Router {
     res.status(201).json({ data: { ticket: repo.getTicket(db, ticketId), policy: evaluation } });
   });
 
-  r.post("/tickets/:id/policy-check", (req, res) => {
+  r.post("/tickets/:id/policy-check", requirePermission("policy.run"), (req, res) => {
     const id = parseOr400(IntId, req.params.id, "ticket id");
     if (!repo.getTicket(db, id)) throw notFound(`Ticket ${id}`);
     res.json({ data: runTicketPolicyCheck(db, id) });

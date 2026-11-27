@@ -1,10 +1,11 @@
 {
   "name": "propguard",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "PropGuard — AI-assisted lease & maintenance operations (prototype)",
   "workspaces": [
-    "server"
+    "server",
+    "web"
   ],
   "scripts": {
     "migrate": "npm run migrate -w server",
@@ -13,9 +14,16 @@
     "dev": "npm run dev -w server",
     "start": "npm run start -w server",
     "test": "npm test -w server",
-    "typecheck": "npm run typecheck -w server"
+    "typecheck": "npm run typecheck -w server && npm run typecheck -w web",
+    "bootstrap-users": "npm run bootstrap-users -w server",
+    "dev:web": "npm run dev -w web",
+    "build": "npm run build -w web",
+    "dev:all": "concurrently -k -n api,web -c blue,magenta \"npm run dev -w server\" \"npm run dev -w web\""
   },
   "allowScripts": {
     "esbuild@0.28.2": true
+  },
+  "devDependencies": {
+    "concurrently": "^10.0.7"
   }
 }

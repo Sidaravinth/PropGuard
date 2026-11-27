@@ -18,8 +18,13 @@ export async function loadDocument(docName: string, bytes: Buffer): Promise<Load
   const isPdf = lower.endsWith(".pdf") || bytes.subarray(0, 5).toString("latin1") === "%PDF-";
 
   if (isPdf) {
-    const pdf = await getDocumentProxy(new Uint8Array(bytes));
-    const { text } = await extractText(pdf, { mergePages: false });
+    let text: string[];
+    try {
+      const pdf = await getDocumentProxy(new Uint8Array(bytes));
+      ({ text } = await extractText(pdf, { mergePages: false }));
+    } catch (err) {
+      throw new UnsupportedDocumentError(`The PDF could not be read (${err instanceof Error ? err.message : "invalid file"}).`);
+    }
     const pages = text.map((p) => p.replace(/[ \t]+\n/g, "\n").trim());
     if (pages.every((p) => p.length === 0)) {
       throw new UnsupportedDocumentError("PDF contains no extractable text (scanned PDFs need OCR, which is not supported).");

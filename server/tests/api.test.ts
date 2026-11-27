@@ -1,47 +1,50 @@
-import request from "supertest";
+import type { Agent } from "supertest";
 import { beforeEach, describe, expect, it } from "vitest";
 import { createApp } from "../src/app.js";
 import { migrate, openDb, type DB } from "../src/db/connection.js";
 import { seedStructured } from "../src/db/seed.js";
 import { LlmUnavailableError, type LlmCall } from "../src/extraction/extractor.js";
+import { signedIn, testAuth } from "./authHelpers.js";
 import { readLease, scriptedLlm, sharmaExtraction } from "./fixtures.js";
 
 let db: DB;
 let llm: LlmCall;
-const app = () => createApp({ db, llm: () => llm });
+/** Every Day 1 endpoint now requires a session; these tests run as the Property Manager. */
+let pm: Agent;
 
-beforeEach(() => {
+beforeEach(async () => {
   db = openDb(":memory:");
   migrate(db);
   seedStructured(db);
   llm = scriptedLlm([JSON.stringify(sharmaExtraction())]);
+  pm = await signedIn(createApp({ db, llm: () => llm, auth: testAuth(db) }), "pm");
 });
 
 const ingestSharma = () =>
-  request(app()).post("/api/leases/ingest").attach("file", readLease("lease_maple_101_sharma.txt"), "lease_maple_101_sharma.txt");
+  pm.post("/api/leases/ingest").attach("file", readLease("lease_maple_101_sharma.txt"), "lease_maple_101_sharma.txt");
 
 describe("read endpoints", () => {
   it("lists units and tenants", async () => {
-    const units = await request(app()).get("/api/units").expect(200);
+    const units = await pm.get("/api/units").expect(200);
     expect(units.body.data).toHaveLength(6);
-    const tenants = await request(app()).get("/api/tenants?status=holdover").expect(200);
+    const tenants = await pm.get("/api/tenants?status=holdover").expect(200);
     expect(tenants.body.data.map((t: { tenant_id: string }) => t.tenant_id)).toEqual(["T004"]);
   });
 
   it("reports the overdue tenant's balance from the ledger", async () => {
-    const r = await request(app()).get("/api/tenants/T003").expect(200);
+    const r = await pm.get("/api/tenants/T003").expect(200);
     expect(r.body.data.unpaid_balance_cents).toBe(315_000);
   });
 
   it("404s with a structured error body", async () => {
-    const r = await request(app()).get("/api/tenants/T999").expect(404);
+    const r = await pm.get("/api/tenants/T999").expect(404);
     expect(r.body.error.code).toBe("NOT_FOUND");
-    await request(app()).get("/api/leases/999").expect(404);
-    await request(app()).get("/api/nope").expect(404);
+    await pm.get("/api/leases/999").expect(404);
+    await pm.get("/api/nope").expect(404);
   });
 
   it("400s on a malformed id", async () => {
-    const r = await request(app()).get("/api/tickets/abc").expect(400);
+    const r = await pm.get("/api/tickets/abc").expect(400);
     expect(r.body.error.code).toBe("VALIDATION_ERROR");
   });
 });
@@ -62,7 +65,7 @@ describe("POST /api/leases/ingest", () => {
     expect(fields.find((f: { field_name: string }) => f.field_name === "notice_period_days").section_ref).toBe("Section 7");
     expect(clauses.length).toBeGreaterThanOrEqual(4);
 
-    const c = await request(app()).get(`/api/leases/${lease.lease_id}/clauses?type=repair`).expect(200);
+    const c = await pm.get(`/api/leases/${lease.lease_id}/clauses?type=repair`).expect(200);
     expect(c.body.data[0].extracted_text).toContain("$100.00");
     expect(c.body.data[0].source_doc_name).toBe("lease_maple_101_sharma.txt");
   });
@@ -71,7 +74,7 @@ describe("POST /api/leases/ingest", () => {
     await ingestSharma().expect(201);
     const second = await ingestSharma().expect(201);
     expect(second.body.data.ingest.replaced_existing).toBe(true);
-    const all = await request(app()).get("/api/leases").expect(200);
+    const all = await pm.get("/api/leases").expect(200);
     expect(all.body.data).toHaveLength(1);
   });
 
@@ -101,7 +104,7 @@ describe("POST /api/leases/ingest", () => {
     };
     const r = await ingestSharma().expect(503);
     expect(r.body.error.code).toBe("LLM_UNAVAILABLE");
-    expect((await request(app()).get("/api/leases").expect(200)).body.data).toHaveLength(0);
+    expect((await pm.get("/api/leases").expect(200)).body.data).toHaveLength(0);
   });
 
   it("keeps the earlier good lease when a re-ingest hits a rate limit", async () => {
@@ -110,7 +113,7 @@ describe("POST /api/leases/ingest", () => {
       throw new Error("429 RESOURCE_EXHAUSTED");
     };
     await ingestSharma().expect(503);
-    const leases = (await request(app()).get("/api/leases").expect(200)).body.data;
+    const leases = (await pm.get("/api/leases").expect(200)).body.data;
     expect(leases).toHaveLength(1);
     expect(leases[0].monthly_rent_cents).toBe(150_000);
   });
@@ -121,13 +124,13 @@ describe("POST /api/leases/ingest", () => {
     llm = scriptedLlm([JSON.stringify(x)]);
     const r = await ingestSharma().expect(201);
     expect(r.body.data.ingest.linked.tenant_created).toBe(true);
-    const t = await request(app()).get(`/api/tenants/${r.body.data.ingest.linked.tenant_id}`).expect(200);
+    const t = await pm.get(`/api/tenants/${r.body.data.ingest.linked.tenant_id}`).expect(200);
     expect(t.body.data.status).toBe("pending");
   });
 
   it("rejects requests without a file and unsupported types", async () => {
-    expect((await request(app()).post("/api/leases/ingest").expect(400)).body.error.code).toBe("FILE_REQUIRED");
-    const r = await request(app()).post("/api/leases/ingest").attach("file", Buffer.from("x"), "lease.docx").expect(422);
+    expect((await pm.post("/api/leases/ingest").expect(400)).body.error.code).toBe("FILE_REQUIRED");
+    const r = await pm.post("/api/leases/ingest").attach("file", Buffer.from("x"), "lease.docx").expect(422);
     expect(r.body.error.code).toBe("UNSUPPORTED_DOCUMENT");
   });
 });
@@ -138,7 +141,7 @@ describe("tickets + policy check", () => {
   });
 
   it("creating a ticket with an inflated quote triggers a deterministic exception (UC3)", async () => {
-    const r = await request(app())
+    const r = await pm
       .post("/api/tickets")
       .send({ unit_id: "U101", tenant_id: "T001", issue_summary: "Oven element replacement", work_order_amount_cents: 10_000, technician_quote_amount_cents: 12_000 })
       .expect(201);
@@ -148,7 +151,7 @@ describe("tickets + policy check", () => {
   });
 
   it("a clean small ticket is auto-approve eligible and cites its lease", async () => {
-    const r = await request(app()).post("/api/tickets/1/policy-check").expect(200);
+    const r = await pm.post("/api/tickets/1/policy-check").expect(200);
     expect(r.body.data.result.verdict).toBe("PASS");
     expect(r.body.data.result.approverRequired).toBe("AUTO_APPROVE");
     expect(r.body.data.result.threeWay.tenantShareCents).toBe(10_000);
@@ -157,7 +160,7 @@ describe("tickets + policy check", () => {
   });
 
   it("injection text in a ticket cannot lower the approval tier (UC4/UC9)", async () => {
-    const r = await request(app())
+    const r = await pm
       .post("/api/tickets")
       .send({
         unit_id: "U101", tenant_id: "T001",
@@ -171,22 +174,22 @@ describe("tickets + policy check", () => {
 
   it("rejects attempts to pass policy fields or non-integer money in the ticket body", async () => {
     const base = { unit_id: "U101", issue_summary: "Test", work_order_amount_cents: 100, technician_quote_amount_cents: 100 };
-    await request(app()).post("/api/tickets").send({ ...base, approverRequired: "AUTO_APPROVE" }).expect(400);
-    await request(app()).post("/api/tickets").send({ ...base, work_order_amount_cents: 99.5 }).expect(400);
-    await request(app()).post("/api/tickets").send({ ...base, work_order_amount_cents: -1 }).expect(400);
-    await request(app()).post("/api/tickets").set("content-type", "application/json").send("{bad json").expect(400);
+    await pm.post("/api/tickets").send({ ...base, approverRequired: "AUTO_APPROVE" }).expect(400);
+    await pm.post("/api/tickets").send({ ...base, work_order_amount_cents: 99.5 }).expect(400);
+    await pm.post("/api/tickets").send({ ...base, work_order_amount_cents: -1 }).expect(400);
+    await pm.post("/api/tickets").set("content-type", "application/json").send("{bad json").expect(400);
   });
 
   it("validates unit/tenant references", async () => {
     const base = { issue_summary: "Test", work_order_amount_cents: 100, technician_quote_amount_cents: 100 };
-    expect((await request(app()).post("/api/tickets").send({ ...base, unit_id: "U999" }).expect(422)).body.error.code).toBe("UNKNOWN_UNIT");
-    expect((await request(app()).post("/api/tickets").send({ ...base, unit_id: "U101", tenant_id: "T002" }).expect(422)).body.error.code).toBe(
+    expect((await pm.post("/api/tickets").send({ ...base, unit_id: "U999" }).expect(422)).body.error.code).toBe("UNKNOWN_UNIT");
+    expect((await pm.post("/api/tickets").send({ ...base, unit_id: "U101", tenant_id: "T002" }).expect(422)).body.error.code).toBe(
       "TENANT_UNIT_MISMATCH",
     );
   });
 
   it("enforces the deposit cap on proposed tenant charges", async () => {
-    const r = await request(app())
+    const r = await pm
       .post("/api/tickets")
       .send({ unit_id: "U101", tenant_id: "T001", issue_summary: "Damage", work_order_amount_cents: 200_000, technician_quote_amount_cents: 200_000, proposed_tenant_charge_cents: 160_000 })
       .expect(201);
@@ -195,15 +198,15 @@ describe("tickets + policy check", () => {
   });
 
   it("tickets without a lease fail closed", async () => {
-    const r = await request(app()).post("/api/tickets/2/policy-check").expect(200); // U102 has no ingested lease here
+    const r = await pm.post("/api/tickets/2/policy-check").expect(200); // U102 has no ingested lease here
     expect(r.body.data.result.exceptions.map((e: { code: string }) => e.code)).toContain("LEASE_NOT_FOUND");
     expect(r.body.data.result.autoApproveEligible).toBe(false);
   });
 
   it("records every evaluation", async () => {
-    await request(app()).post("/api/tickets/1/policy-check").expect(200);
-    await request(app()).post("/api/tickets/1/policy-check").expect(200);
-    const r = await request(app()).get("/api/tickets/1/policy-evaluations").expect(200);
+    await pm.post("/api/tickets/1/policy-check").expect(200);
+    await pm.post("/api/tickets/1/policy-check").expect(200);
+    const r = await pm.get("/api/tickets/1/policy-evaluations").expect(200);
     expect(r.body.data).toHaveLength(2);
     expect(r.body.data[0].input.facts.workOrderCents).toBe(15_000);
   });
@@ -211,7 +214,7 @@ describe("tickets + policy check", () => {
 
 describe("docs", () => {
   it("serves the OpenAPI document", async () => {
-    const r = await request(app()).get("/openapi.json").expect(200);
+    const r = await pm.get("/openapi.json").expect(200);
     expect(Object.keys(r.body.paths)).toContain("/tickets/{id}/policy-check");
   });
 });

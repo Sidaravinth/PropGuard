@@ -18,7 +18,7 @@ export interface LeaseRow {
   source_doc_name: string; extraction_status: "complete" | "needs_review"; extraction_model: string; created_at: string;
 }
 export interface FieldSourceRow {
-  lease_id: number; field_name: string; value_text: string | null; status: FieldStatus;
+  lease_id: number; field_name: string; value_text: string | null; status: FieldStatus | "corrected";
   section_ref: string | null; page: number | null; verbatim_snippet: string | null; note: string | null;
 }
 export interface ClauseRow {

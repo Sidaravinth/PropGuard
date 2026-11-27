@@ -11,7 +11,7 @@ npm install
 cp .env.example .env            # set GEMINI_API_KEY (free: https://aistudio.google.com/apikey)
 
 npm run migrate                 # create/upgrade the schema only (idempotent; seed also does this)
-npm run seed                    # reset DB, seed structured data, ingest the 5 leases via the LLM, run policy on all tickets
+npm run seed                    # (Day 2: writes data/propguard-sample.db, never the live DB) reset sample DB, seed structured data, ingest the 5 leases via the LLM, run policy on all tickets
 npm run seed -- --no-ingest     # same without the LLM (no API key needed; tickets fail closed with LEASE_NOT_FOUND)
 npm run dev                     # API on http://localhost:3001, Swagger UI at /docs
 npm test                        # unit + API tests (no network, no API key)

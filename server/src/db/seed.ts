@@ -1,5 +1,6 @@
 /**
- * Reset + seed the database.
+ * Reset + seed the SAMPLE database (data/propguard-sample.db, or SEED_DB_PATH) for development and
+ * evaluation. It never touches the live database (DB_PATH): normal operation is user-driven.
  *   npm run seed                 structured records + ingest all leases in data/leases via the LLM pipeline
  *   npm run seed -- --no-ingest  structured records only (no API key needed)
  *
@@ -31,8 +32,14 @@ export function seedStructured(db: DB): void {
 async function main() {
   const skipIngest = process.argv.includes("--no-ingest");
 
-  for (const suffix of ["", "-wal", "-shm"]) fs.rmSync(config.dbPath + suffix, { force: true });
-  const db = openDb(config.dbPath);
+  // Sample data goes to its own database (SEED_DB_PATH), never the live one the app uses (DB_PATH).
+  const target = config.sampleDbPath;
+  if (path.resolve(target) === path.resolve(config.dbPath)) {
+    console.error(`Refusing to seed: SEED_DB_PATH points at the live database (${config.dbPath}).`);
+    process.exit(1);
+  }
+  for (const suffix of ["", "-wal", "-shm"]) fs.rmSync(target + suffix, { force: true });
+  const db = openDb(target);
   migrate(db);
   seedStructured(db);
   console.log(`Seeded ${UNITS.length} units, ${TENANTS.length} tenants, ${LEDGER.length} ledger entries, ${TICKETS.length} tickets.`);
@@ -54,7 +61,7 @@ async function main() {
     const r = runTicketPolicyCheck(db, id).result;
     console.log(`  ticket #${id}: ${r.verdict.padEnd(9)} approver=${r.approverRequired.padEnd(17)} ${r.exceptions.map((e) => e.code).join(", ")}`);
   }
-  console.log(`DB: ${config.dbPath}`);
+  console.log(`Sample DB: ${target}\nRun the app against it with: DB_PATH=${target} npm run dev`);
 }
 
 if (process.argv[1] && import.meta.url.endsWith(path.basename(process.argv[1]))) {

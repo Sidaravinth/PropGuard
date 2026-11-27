@@ -26,11 +26,12 @@ describe("schema", () => {
   });
 
   it("declares the expected foreign keys", () => {
-    expect(fks("tenants")).toEqual(["unit_id->units.unit_id"]);
+    expect(fks("tenants")).toEqual(["source_document_id->documents.document_id", "unit_id->units.unit_id"]);
+    expect(fks("units")).toEqual(["property_id->properties.property_id"]);
     expect(fks("leases")).toEqual(["source_doc_name->source_documents.doc_name", "tenant_id->tenants.tenant_id", "unit_id->units.unit_id"]);
     expect(fks("lease_clauses")).toEqual(["lease_id->leases.lease_id"]);
     expect(fks("maintenance_tickets")).toEqual(["tenant_id->tenants.tenant_id", "unit_id->units.unit_id"]);
-    expect(fks("payment_ledger")).toEqual(["tenant_id->tenants.tenant_id"]);
+    expect(fks("payment_ledger")).toEqual(["source_document_id->documents.document_id", "tenant_id->tenants.tenant_id"]);
   });
 
   it("enforces foreign keys at runtime", () => {

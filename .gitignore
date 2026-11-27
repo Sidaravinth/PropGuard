@@ -9,3 +9,6 @@ coverage/
 
 # Office lock files
 .~lock.*#
+
+# Uploaded originals (local document store)
+data/uploads/
