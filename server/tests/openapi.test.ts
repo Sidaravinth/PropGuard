@@ -26,7 +26,7 @@ const routesOf = (router: Router, prefix = "") =>
 const registered = [
   ...routesOf(createAuthRouter(new AuthService(db)), "/auth"),
   ...routesOf(createRouter(db, { llm: never })),
-  ...routesOf(createLeaseRouter(db, { llm: never, store: never })),
+  ...routesOf(createLeaseRouter(db, { llm: never, store: never, qaLlm: never })),
   ...routesOf(createRecordsRouter(db, { store: never })),
   ...routesOf(createBriefRouter(db, { agentLlm: never })),
 ].sort();

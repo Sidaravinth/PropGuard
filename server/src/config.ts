@@ -35,6 +35,14 @@ export const config = {
   renewalScanIntervalMinutes: intFromEnv("RENEWAL_SCAN_INTERVAL_MINUTES", 60, 1),
   /** Max LLM attempts per document (1 initial + retries) before the doc is stored as needs_review. */
   extractionMaxAttempts: Number(process.env.EXTRACTION_MAX_ATTEMPTS ?? 3),
+  /** Local OCR (tesseract.js) for scanned PDFs and images: on unless OCR_ENABLED=false. */
+  ocrEnabled: (process.env.OCR_ENABLED || "true").trim().toLowerCase() !== "false",
+  /** Longest document accepted for text extraction or OCR, in pages. */
+  ocrMaxPages: intFromEnv("OCR_MAX_PAGES", 50, 1),
+  /** Time limit for recognising one page. */
+  ocrPageTimeoutMs: intFromEnv("OCR_PAGE_TIMEOUT_MS", 120_000, 1),
+  /** Model for the grounded Q&A chat; defaults to the agent model. */
+  qaModel: process.env.QA_MODEL || process.env.AGENT_MODEL || "gemini-3.5-flash-lite",
   auth: {
     /** Absolute session lifetime. */
     sessionTtlHours: Number(process.env.SESSION_TTL_HOURS ?? 8),

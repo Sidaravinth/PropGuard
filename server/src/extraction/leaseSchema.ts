@@ -10,7 +10,7 @@ import { z } from "zod";
 export const FieldStatus = z.enum(["extracted", "missing", "needs_review"]);
 export type FieldStatus = z.infer<typeof FieldStatus>;
 
-export const ClauseType = z.enum(["rent", "deposit", "repair", "pet", "notice", "renewal", "late_fee", "other"]);
+export const ClauseType = z.enum(["rent", "deposit", "repair", "pet", "notice", "renewal", "late_fee", "termination", "payment", "other"]);
 export type ClauseType = z.infer<typeof ClauseType>;
 
 function field<T extends z.ZodType>(value: T, valueHint: string) {
@@ -31,6 +31,7 @@ function field<T extends z.ZodType>(value: T, valueHint: string) {
 
 export const LeaseFields = {
   tenant_name: field(z.string(), "Full name of the tenant/resident/lessee"),
+  landlord_name: field(z.string(), "Name of the landlord/lessor/owner (person or company)"),
   property_name: field(z.string(), 'Name of the property/building, e.g. "Maple Court Apartments"'),
   unit_number: field(z.string(), 'Unit/apartment/loft number only, e.g. "101"'),
   start_date: field(z.string(), "Lease start date as YYYY-MM-DD"),
@@ -55,7 +56,7 @@ export const LeaseExtractionSchema = z.object({
   ...LeaseFields,
   clauses: z
     .array(ExtractedClause)
-    .describe("Key clauses present in the document (rent, deposit, repair, pet, notice, renewal, late_fee). Omit types that are absent."),
+    .describe("Key clauses present in the document (rent, deposit, repair, pet, notice, renewal, late_fee, termination, payment). Omit types that are absent."),
 });
 
 export type LeaseExtraction = z.infer<typeof LeaseExtractionSchema>;

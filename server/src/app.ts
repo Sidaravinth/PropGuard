@@ -16,6 +16,7 @@ import { AuthService } from "./auth/authService.js";
 import { sameOriginWrites, sessionMiddleware } from "./auth/middleware.js";
 import type { DB } from "./db/connection.js";
 import { createGeminiLlmCall, type LlmCall } from "./extraction/extractor.js";
+import { qaJsonSchema } from "./qa/answer.js";
 
 export interface AppDeps {
   db: DB;
@@ -23,6 +24,8 @@ export interface AppDeps {
   llm?: () => LlmCall;
   /** Factory for the agent model (tool calling + structured drafting). Tests inject a scripted double. */
   agentLlm?: () => AgentLlm;
+  /** Model for the grounded Q&A chat (structured answers with citations). Tests inject a scripted double. */
+  qaLlm?: () => LlmCall;
   /** Injectable for tests (clock, bcrypt cost); defaults to one built from config. */
   auth?: AuthService;
   /** Built frontend (web/dist). When present it is served at / with SPA fallback. */
@@ -31,7 +34,7 @@ export interface AppDeps {
   store?: DocumentStore;
 }
 
-export function createApp({ db, llm, agentLlm, auth = new AuthService(db), webDist, store }: AppDeps) {
+export function createApp({ db, llm, agentLlm, qaLlm, auth = new AuthService(db), webDist, store }: AppDeps) {
   let defaultAgentLlm: AgentLlm | null = null;
   const getAgentLlm = agentLlm ?? (() => (defaultAgentLlm ??= createGeminiAgentLlm()));
   const app = express();
@@ -39,6 +42,8 @@ export function createApp({ db, llm, agentLlm, auth = new AuthService(db), webDi
   const getLlm = llm ?? (() => (defaultLlm ??= createGeminiLlmCall()));
   let defaultStore: DocumentStore | null = null;
   const getStore = () => store ?? (defaultStore ??= new LocalDocumentStore(config.uploadsDir));
+  let defaultQaLlm: LlmCall | null = null;
+  const getQaLlm = qaLlm ?? (() => (defaultQaLlm ??= createGeminiLlmCall(config.qaModel, qaJsonSchema(), config.agentTimeoutMs)));
 
   app.disable("x-powered-by");
   app.use((_req, res, next) => {
@@ -57,7 +62,7 @@ export function createApp({ db, llm, agentLlm, auth = new AuthService(db), webDi
   });
   app.use("/api/auth", createAuthRouter(auth));
   app.use("/api", createRouter(db, { llm: getLlm }));
-  app.use("/api", createLeaseRouter(db, { llm: getLlm, store: getStore }));
+  app.use("/api", createLeaseRouter(db, { llm: getLlm, store: getStore, qaLlm: getQaLlm }));
   app.use("/api", createRecordsRouter(db, { store: getStore }));
   app.use("/api", createBriefRouter(db, { agentLlm: getAgentLlm }));
 

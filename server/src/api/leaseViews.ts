@@ -18,11 +18,27 @@ export function leaseListItem(db: DB, lease: repo.LeaseRow) {
   return { ...repo.leaseSummary(db, lease), ...links(db, lease) };
 }
 
+/** How the lease text was read: per page, and overall (text, ocr or mixed). */
+function textSource(db: DB, lease: repo.LeaseRow) {
+  const pages = repo.getSourcePages(db, lease.source_doc_name);
+  if (!pages.length) return null;
+  const ocr = pages.filter((p) => p.method === "ocr");
+  const conf = ocr.map((p) => p.confidence).filter((c): c is number => c !== null);
+  return {
+    method: ocr.length === 0 ? "text" : ocr.length === pages.length ? "ocr" : "mixed",
+    page_count: pages.length,
+    ocr_pages: ocr.map((p) => p.page),
+    average_ocr_confidence: conf.length ? Math.round(conf.reduce((a, b) => a + b, 0) / conf.length) : null,
+    pages,
+  };
+}
+
 export function leaseDetail(db: DB, leaseId: number) {
   const lease = repo.getLeaseRow(db, leaseId)!;
   return {
     ...repo.leaseSummary(db, lease),
     ...links(db, lease),
+    text_source: textSource(db, lease),
     fields: repo.getFieldSources(db, leaseId),
     clauses: repo.getClauses(db, leaseId),
   };

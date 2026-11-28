@@ -19,6 +19,7 @@ const f = (value: string | number | null, section_ref: string | null, verbatim_s
 export function sharmaExtraction(): LeaseExtraction {
   return {
     tenant_name: f("Priya Sharma", "Preamble", 'Maple Court Property Holdings LLC ("Landlord") and Priya Sharma ("Tenant")') as never,
+    landlord_name: f("Maple Court Property Holdings LLC", "Preamble", 'between Maple Court Property Holdings LLC ("Landlord") and Priya Sharma') as never,
     property_name: f("Maple Court Apartments", "Section 1", "Unit 101, Maple Court Apartments, 1420 Maple Avenue, Springfield") as never,
     unit_number: f("101", "Section 1", "Unit 101, Maple Court Apartments") as never,
     start_date: f("2026-01-16", "Section 2", "The term of this Lease shall commence on January 16, 2026 and shall end on January 15, 2027") as never,

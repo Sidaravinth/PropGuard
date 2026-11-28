@@ -28,6 +28,7 @@ export const centsToDollarInput = (cents: number | null): string => (cents === n
 
 export const FIELD_META: Record<LeaseFieldName, { label: string; kind: "money" | "date" | "days" | "text" }> = {
   tenant_name: { label: "Tenant name", kind: "text" },
+  landlord_name: { label: "Landlord", kind: "text" },
   property_name: { label: "Property", kind: "text" },
   unit_number: { label: "Unit number", kind: "text" },
   start_date: { label: "Lease start", kind: "date" },
@@ -55,12 +56,45 @@ export function formatFieldValue(field: LeaseFieldName, valueText: string | null
 
 export const CLAUSE_LABEL: Record<string, string> = {
   rent: "Rent", deposit: "Deposit", repair: "Repair", pet: "Pet", notice: "Notice",
-  renewal: "Renewal", late_fee: "Late fee", other: "Other",
+  renewal: "Renewal", late_fee: "Late fee", termination: "Termination", payment: "Payment terms", other: "Other",
 };
 
 export function gapLabel(field: string): string {
   if (field === "unit_link") return "Unit link";
   if (field === "tenant_link") return "Tenant link";
   if (field.startsWith("clause:")) return `${CLAUSE_LABEL[field.slice(7)] ?? field.slice(7)} clause`;
+  if (field.startsWith("ocr_page:")) return `OCR quality, page ${field.slice(9)}`;
   return FIELD_META[field as LeaseFieldName]?.label ?? field;
+}
+
+/** Shown wherever documents are uploaded or their extracted data is reviewed. */
+export const OCR_WARNING =
+  "Document extraction uses OCR and AI to interpret uploaded agreements. OCR may not accurately recognize all text, especially in low-quality scans, handwritten sections, complex tables, or unusual document layouts. Extracted information may contain errors or omissions. Please review and verify all extracted fields against the original agreement before relying on them.";
+
+type DocStatus = { status: "processing" | "extracted" | "needs_review" | "failed" | "imported"; processing_stage?: string | null };
+
+/** The processing status in words: Uploaded, Text extraction / OCR / AI extraction in progress, Review required, Completed, Failed. */
+export function documentStatusLabel(d: DocStatus): string {
+  if (d.status === "processing") {
+    switch (d.processing_stage) {
+      case "text_extraction":
+        return "Text extraction in progress";
+      case "ocr":
+        return "OCR in progress";
+      case "ai_extraction":
+        return "AI extraction in progress";
+      default:
+        return "Uploaded";
+    }
+  }
+  if (d.status === "needs_review") return "Review required";
+  if (d.status === "failed") return "Failed";
+  return "Completed";
+}
+
+export function textMethodLabel(method: "text" | "ocr" | "mixed" | null | undefined): string | null {
+  if (method === "ocr") return "Read by OCR";
+  if (method === "mixed") return "Text + OCR";
+  if (method === "text") return "Digital text";
+  return null;
 }

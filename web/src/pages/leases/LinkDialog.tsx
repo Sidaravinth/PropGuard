@@ -3,10 +3,28 @@ import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { ApiRequestError } from "../../api/client";
 import { leasesApi, type LeaseDetail, type Tenant, type Unit } from "../../api/leases";
 import { Alert, Modal } from "../../components/ui";
-import { parseDollarsToCents } from "../../lib/format";
+import { centsToDollarInput, formatCents, parseDollarsToCents } from "../../lib/format";
 
 const NEW = "__new__";
 const NONE = "";
+
+/** What linking will do to the chosen unit's base rent (the server applies the same rule). */
+function RentNote({ lease, unit }: { lease: LeaseDetail; unit: Unit | undefined }) {
+  if (!unit) return null;
+  const rent = lease.monthly_rent_cents;
+  if (rent === null) {
+    return <span className="field-hint">The agreement's monthly rent is not verified yet, so this unit's base rent ({formatCents(unit.base_rent_cents)}) stays as it is.</span>;
+  }
+  if (lease.lease_state === "expired") {
+    return <span className="field-hint">This agreement has expired, so the unit's base rent ({formatCents(unit.base_rent_cents)}) is not changed.</span>;
+  }
+  if (unit.base_rent_cents === rent) return <span className="field-hint">The unit's base rent already matches the agreement ({formatCents(rent)}).</span>;
+  return (
+    <span className="field-hint">
+      Linking updates this unit's base rent from {formatCents(unit.base_rent_cents)} to <strong>{formatCents(rent)}</strong>, the monthly rent in the agreement.
+    </span>
+  );
+}
 
 /** Link a lease to an existing unit and tenant, or create them first. */
 export function LinkDialog({ lease, onClose, onSaved }: { lease: LeaseDetail; onClose: () => void; onSaved: (l: LeaseDetail) => void }) {
@@ -15,7 +33,8 @@ export function LinkDialog({ lease, onClose, onSaved }: { lease: LeaseDetail; on
   const [tenants, setTenants] = useState<Tenant[]>([]);
   const [unitChoice, setUnitChoice] = useState<string>(lease.unit_id ?? NONE);
   const [tenantChoice, setTenantChoice] = useState<string>(lease.tenant_id ?? NONE);
-  const [newUnit, setNewUnit] = useState({ property_name: extracted("property_name"), unit_number: extracted("unit_number"), rent: "" });
+  // A new unit starts with the agreement's verified monthly rent as its base rent.
+  const [newUnit, setNewUnit] = useState({ property_name: extracted("property_name"), unit_number: extracted("unit_number"), rent: centsToDollarInput(lease.monthly_rent_cents) });
   const [newTenant, setNewTenant] = useState({ name: extracted("tenant_name"), email: "" });
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -99,6 +118,7 @@ export function LinkDialog({ lease, onClose, onSaved }: { lease: LeaseDetail; on
             <option value={NEW}>+ Create a new unit</option>
           </select>
         </label>
+        {unitChoice && unitChoice !== NEW && <RentNote lease={lease} unit={(units ?? []).find((u) => u.unit_id === unitChoice)} />}
         {unitChoice === NEW && (
           <div className="subform">
             <label className="field">

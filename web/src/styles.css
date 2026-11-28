@@ -455,3 +455,30 @@ textarea { resize: vertical; }
 .json { margin: 0; padding: 10px; max-height: 360px; overflow: auto; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); font: 12px/1.5 ui-monospace, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
 .hash { margin-top: 6px; font-family: ui-monospace, Consolas, monospace; }
 .table-foot { display: flex; align-items: center; justify-content: space-between; border-top: 1px solid var(--border); }
+
+/* OCR / extraction notice on the lease review page */
+.ocr-notice { margin: 0 0 12px; padding: 8px 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg); font-size: 13px; }
+.ocr-notice summary { cursor: pointer; display: flex; align-items: center; gap: 6px; font-weight: 600; color: var(--text-muted); }
+.ocr-notice p { margin: 8px 0 0; line-height: 1.5; }
+
+/* Grounded Q&A chat (lease review side panel) */
+.qa-panel { display: flex; flex-direction: column; gap: 10px; height: calc(100vh - 230px); min-height: 360px; }
+.qa-intro { line-height: 1.45; }
+.qa-messages { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; padding-right: 2px; }
+.qa-empty { display: grid; justify-items: start; gap: 8px; color: var(--text-muted); padding: 8px 0; }
+.qa-empty .chip { text-align: left; white-space: normal; }
+.qa-question { align-self: flex-end; max-width: 88%; padding: 8px 12px; border-radius: 12px 12px 2px 12px; background: var(--primary); color: #fff; font-size: 13px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.qa-answer { align-self: stretch; padding: 10px 12px; border: 1px solid var(--border); border-radius: 12px 12px 12px 2px; background: var(--surface); font-size: 13px; line-height: 1.5; }
+.qa-answer p { margin: 0 0 6px; }
+.qa-not-found { display: flex; gap: 6px; align-items: flex-start; color: var(--text-muted); background: var(--bg); }
+.qa-loading { display: flex; gap: 6px; align-items: center; color: var(--text-muted); }
+.qa-conflict { border-color: var(--warning); }
+.qa-conflict-label { display: flex; gap: 6px; align-items: center; margin-bottom: 8px; color: var(--warning); font-weight: 600; font-size: 12.5px; }
+.qa-statement + .qa-statement { margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--border); }
+.qa-citations { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; font-size: 12px; }
+.qa-citations blockquote { margin: 3px 0 0; padding: 4px 8px; border-left: 3px solid var(--border); color: var(--text-muted); font-size: 12px; overflow-wrap: anywhere; }
+.qa-notice { margin-top: 8px; padding: 6px 8px; border-radius: var(--radius-sm); background: var(--warning-soft); color: var(--warning); font-size: 12px; }
+.qa-form { display: grid; gap: 6px; }
+.qa-form textarea { width: 100%; font-size: 13px; }
+.qa-form-actions { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+@media (max-width: 1100px) { .qa-panel { height: auto; } .qa-messages { max-height: 60vh; } }

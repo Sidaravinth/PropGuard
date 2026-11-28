@@ -8,6 +8,7 @@ import * as repo from "../db/repo.js";
 import type { LlmCall } from "../extraction/extractor.js";
 import { ingestLeaseDocument, type IngestResult } from "../extraction/ingest.js";
 import { audit, type Actor } from "./audit.js";
+import { auditUnitRentSync } from "./leaseCorrections.js";
 
 export async function auditedIngest(db: DB, input: { docName: string; bytes: Buffer }, llm: LlmCall, actor: Actor, source: "api" | "cli"): Promise<IngestResult> {
   const base = { source, doc_name: input.docName, sha256: crypto.createHash("sha256").update(input.bytes).digest("hex"), size_bytes: input.bytes.length };
@@ -24,6 +25,7 @@ export async function auditedIngest(db: DB, input: { docName: string; bytes: Buf
     });
     throw err;
   }
+  auditUnitRentSync(db, result.unit_rent_synced, actor, `Matched to the monthly rent in ${input.docName}`);
   audit(db, {
     event_type: "extraction_completed",
     actor,

@@ -1,11 +1,12 @@
-import { CircleAlert, FileText, LoaderCircle, RotateCw, Search, Upload } from "lucide-react";
+import { CircleAlert, FileText, LoaderCircle, RotateCw, Search, Trash2, Upload } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router";
 import { ApiRequestError } from "../../api/client";
 import { leasesApi, type DocumentRecord, type LeaseSummary } from "../../api/leases";
 import { useAuth } from "../../auth/AuthContext";
 import { Alert, Card, EmptyState, LeaseFlagBadges, LeaseStateBadge, PageHeader } from "../../components/ui";
-import { formatCents, formatDate } from "../../lib/format";
+import { documentStatusLabel, formatCents, formatDate } from "../../lib/format";
+import { DeleteDocumentDialog } from "./DeleteDocumentDialog";
 import { UploadPanel } from "./UploadPanel";
 
 const FILTERS = [
@@ -35,10 +36,28 @@ function matchesFilter(l: LeaseSummary, f: FilterKey): boolean {
   }
 }
 
+/** Uploads still being read (text extraction, OCR, AI extraction), with their current stage. */
+function ProcessingUploads({ docs }: { docs: DocumentRecord[] }) {
+  if (!docs.length) return null;
+  return (
+    <Alert tone="info">
+      <strong>Processing {docs.length} upload{docs.length === 1 ? "" : "s"}.</strong>
+      <ul className="gap-list">
+        {docs.map((d) => (
+          <li key={d.document_id} className="status-line">
+            <LoaderCircle size={14} className="spin" aria-hidden /> {d.doc_name}: {documentStatusLabel(d)}…
+          </li>
+        ))}
+      </ul>
+    </Alert>
+  );
+}
+
 function FailedUploads({ docs, onRetried }: { docs: DocumentRecord[]; onRetried: () => void }) {
   const { can } = useAuth();
   const [busy, setBusy] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState<DocumentRecord | null>(null);
   if (!docs.length) return null;
   const retry = async (id: number) => {
     setBusy(id);
@@ -88,6 +107,11 @@ function FailedUploads({ docs, onRetried }: { docs: DocumentRecord[]; onRetried:
                       {busy === d.document_id ? <LoaderCircle size={14} className="spin" aria-hidden /> : <RotateCw size={14} aria-hidden />}
                       Retry
                     </button>
+                  )}{" "}
+                  {can("records.write") && (
+                    <button className="btn btn-danger btn-sm" disabled={busy !== null} onClick={() => setDeleting(d)} aria-label={`Delete ${d.doc_name}`}>
+                      <Trash2 size={14} aria-hidden /> Delete
+                    </button>
                   )}
                 </td>
               </tr>
@@ -95,6 +119,18 @@ function FailedUploads({ docs, onRetried }: { docs: DocumentRecord[]; onRetried:
           </tbody>
         </table>
       </div>
+      {deleting && (
+        <DeleteDocumentDialog
+          documentId={deleting.document_id}
+          docName={deleting.doc_name}
+          hasLease={deleting.lease_id !== null}
+          onClose={() => setDeleting(null)}
+          onDeleted={() => {
+            setDeleting(null);
+            onRetried();
+          }}
+        />
+      )}
     </Card>
   );
 }
@@ -139,6 +175,14 @@ export function LeasesPage() {
   }, [leases, filter, query]);
 
   const failed = docs.filter((d) => d.status === "failed");
+  const processing = docs.filter((d) => d.status === "processing");
+  // While anything is still processing, refresh so its stage and the finished lease appear.
+  const stillProcessing = processing.length > 0;
+  useEffect(() => {
+    if (!stillProcessing) return;
+    const t = setTimeout(() => void load(), 2000);
+    return () => clearTimeout(t);
+  }, [stillProcessing, docs, load]);
 
   return (
     <>
@@ -157,6 +201,7 @@ export function LeasesPage() {
 
       {showUpload && <UploadPanel onClose={() => setShowUpload(false)} onUploaded={() => void load()} />}
       {error && <Alert tone="error">{error}</Alert>}
+      <ProcessingUploads docs={processing} />
       <FailedUploads docs={failed} onRetried={() => void load()} />
 
       <section className="card">
@@ -186,7 +231,7 @@ export function LeasesPage() {
           </div>
         ) : leases.length === 0 ? (
           <EmptyState icon={FileText} title="No leases yet">
-            Upload a signed lease (PDF or text). PropGuard saves the original, extracts the key terms with their source evidence, and flags anything missing or
+            Upload a signed lease (PDF, scanned PDF, Word, text or a photo). PropGuard saves the original, extracts the key terms with their source evidence, and flags anything missing or
             ambiguous for review.
           </EmptyState>
         ) : visible.length === 0 ? (

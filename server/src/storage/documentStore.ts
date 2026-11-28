@@ -12,6 +12,8 @@ export interface DocumentStore {
   put(bytes: Buffer, ext: string): Promise<string>;
   get(key: string): Promise<Buffer>;
   exists(key: string): Promise<boolean>;
+  /** Remove a stored file. Removing a file that is already gone is not an error. */
+  delete(key: string): Promise<void>;
 }
 
 export class StoredFileMissingError extends Error {}
@@ -53,5 +55,9 @@ export class LocalDocumentStore implements DocumentStore {
 
   async exists(key: string): Promise<boolean> {
     return fs.existsSync(this.resolve(key));
+  }
+
+  async delete(key: string): Promise<void> {
+    await fs.promises.rm(this.resolve(key), { force: true });
   }
 }

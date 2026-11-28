@@ -1,14 +1,15 @@
-import { CheckCircle2, CircleAlert, FileText, LoaderCircle, UploadCloud, X } from "lucide-react";
+import { CheckCircle2, CircleAlert, FileText, LoaderCircle, ScanText, UploadCloud, X } from "lucide-react";
 import { useRef, useState, type DragEvent } from "react";
 import { Link } from "react-router";
 import { ApiRequestError } from "../../api/client";
-import { uploadLease, type UploadResult } from "../../api/leases";
-import { formatBytes } from "../../lib/format";
+import { leasesApi, uploadLease, type DocumentRecord, type UploadResult } from "../../api/leases";
+import { Alert } from "../../components/ui";
+import { documentStatusLabel, formatBytes, OCR_WARNING, textMethodLabel } from "../../lib/format";
 
 type ItemState =
   | { phase: "queued" }
   | { phase: "uploading"; progress: number }
-  | { phase: "extracting" }
+  | { phase: "processing"; doc: DocumentRecord }
   | { phase: "done"; result: UploadResult }
   | { phase: "error"; code: string; message: string; existingLeaseId?: number | null };
 
@@ -18,15 +19,39 @@ interface Item {
   state: ItemState;
 }
 
-const ACCEPTED = [".pdf", ".txt"];
+const ACCEPTED = [".pdf", ".txt", ".docx", ".png", ".jpg", ".jpeg"];
+const POLL_MS = 1500;
 const MAX_BYTES = 10 * 1024 * 1024;
 
 function validate(file: File): string | null {
   const ext = file.name.slice(file.name.lastIndexOf(".")).toLowerCase();
-  if (!ACCEPTED.includes(ext)) return "Only .pdf and .txt lease documents are supported";
+  if (!ACCEPTED.includes(ext)) return "Supported files: .pdf (text or scanned), .docx, .txt, .png and .jpg";
   if (file.size === 0) return "The file is empty";
   if (file.size > MAX_BYTES) return "The file is larger than 10 MB";
   return null;
+}
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * Follow a stored upload through its stages (text extraction, OCR, AI extraction) until it finishes, then
+ * load the extracted lease. A few failed polls in a row (for example a brief network drop) are tolerated.
+ */
+async function waitForProcessing(doc: DocumentRecord, onProgress: (doc: DocumentRecord) => void): Promise<UploadResult> {
+  let current = doc;
+  let failures = 0;
+  while (current.status === "processing") {
+    onProgress(current);
+    await sleep(POLL_MS);
+    try {
+      current = await leasesApi.document(doc.document_id);
+      failures = 0;
+    } catch (err) {
+      if ((err instanceof ApiRequestError && err.status === 401) || ++failures >= 5) throw err;
+    }
+  }
+  const lease = current.lease_id ? await leasesApi.get(current.lease_id) : null;
+  return { document: current, lease };
 }
 
 function ItemStatus({ item }: { item: Item }) {
@@ -40,10 +65,10 @@ function ItemStatus({ item }: { item: Item }) {
           <div className="progress-bar" style={{ width: `${Math.round(s.progress * 100)}%` }} />
         </div>
       );
-    case "extracting":
+    case "processing":
       return (
         <span className="status-line">
-          <LoaderCircle size={14} className="spin" aria-hidden /> Extracting lease terms…
+          <LoaderCircle size={14} className="spin" aria-hidden /> {documentStatusLabel(s.doc)}…
         </span>
       );
     case "error":
@@ -68,10 +93,16 @@ function ItemStatus({ item }: { item: Item }) {
         );
       }
       const gaps = lease?.gaps.length ?? 0;
+      const method = textMethodLabel(d.text_method);
       return (
         <span className={`status-line ${gaps ? "text-warning" : "text-success"}`}>
           {gaps ? <CircleAlert size={14} aria-hidden /> : <CheckCircle2 size={14} aria-hidden />}
-          {gaps ? `Extracted · ${gaps} item${gaps === 1 ? " needs" : "s need"} review` : "Extracted · all fields verified"}
+          {gaps ? `Review required · ${gaps} item${gaps === 1 ? " needs" : "s need"} review` : "Completed · all fields verified"}
+          {method && d.text_method !== "text" && (
+            <span className="badge badge-warning" title="Text was recognised from an image. Check values against the original.">
+              <ScanText size={12} aria-hidden /> {method}
+            </span>
+          )}
           {lease && (
             <>
               {" "}
@@ -103,7 +134,8 @@ export function UploadPanel({ onClose, onUploaded }: { onClose: () => void; onUp
         const item = queue.current.shift()!;
         update(item.id, { phase: "uploading", progress: 0 });
         try {
-          const result = await uploadLease(item.file, (p) => update(item.id, p >= 1 ? { phase: "extracting" } : { phase: "uploading", progress: p }));
+          const stored = await uploadLease(item.file, (p) => p < 1 && update(item.id, { phase: "uploading", progress: p }));
+          const result = await waitForProcessing(stored.document, (doc) => update(item.id, { phase: "processing", doc }));
           update(item.id, { phase: "done", result });
           onUploaded();
         } catch (err) {
@@ -135,20 +167,23 @@ export function UploadPanel({ onClose, onUploaded }: { onClose: () => void; onUp
     if (e.dataTransfer.files.length) addFiles(e.dataTransfer.files);
   };
 
-  const busy = items.some((i) => i.state.phase === "queued" || i.state.phase === "uploading" || i.state.phase === "extracting");
+  const busy = items.some((i) => i.state.phase === "queued" || i.state.phase === "uploading" || i.state.phase === "processing");
 
   return (
     <section className="card mb">
       <header className="card-header">
         <div>
           <h2 className="card-title">Upload lease documents</h2>
-          <p className="card-subtitle">PDF or text files, up to 10 MB each. The original is saved before extraction starts.</p>
+          <p className="card-subtitle">PDF (text or scanned), Word, text or image files, up to 10 MB each. The original is saved before extraction starts.</p>
         </div>
         <button className="icon-btn" onClick={onClose} disabled={busy} aria-label="Close upload panel" title={busy ? "Wait for uploads to finish" : "Close"}>
           <X size={18} />
         </button>
       </header>
       <div className="card-body">
+        <Alert tone="info">
+          <strong>Please verify extracted data.</strong> {OCR_WARNING}
+        </Alert>
         <div
           className={`dropzone${dragging ? " dragging" : ""}`}
           onDragOver={(e) => {
@@ -166,11 +201,11 @@ export function UploadPanel({ onClose, onUploaded }: { onClose: () => void; onUp
           <div>
             <strong>Drop lease files here</strong> or click to choose
           </div>
-          <div className="muted small">Multiple files allowed · .pdf, .txt</div>
+          <div className="muted small">Multiple files allowed · .pdf, .docx, .txt, .png, .jpg · scanned pages are read with OCR on this server</div>
           <input
             ref={inputRef}
             type="file"
-            accept=".pdf,.txt,application/pdf,text/plain"
+            accept=".pdf,.txt,.docx,.png,.jpg,.jpeg,application/pdf,text/plain,image/png,image/jpeg,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
             multiple
             hidden
             onChange={(e) => {

@@ -9,6 +9,7 @@ import { ApiError } from "../api/errors.js";
 import { tx, type DB } from "../db/connection.js";
 import * as repo from "../db/repo.js";
 import { LEASE_FIELD_NAMES, type LeaseFieldName } from "../extraction/leaseSchema.js";
+import { audit, type Actor } from "./audit.js";
 
 const COLUMN: Partial<Record<LeaseFieldName, keyof repo.LeaseRow>> = {
   start_date: "start_date",
@@ -136,10 +137,27 @@ export function correctLeaseField(db: DB, leaseId: number, field: string, value:
       new_value_text: norm?.text ?? null, new_status: newStatus, reason, corrected_by: userId,
     });
     refreshStatus(db, leaseId);
+    // A confirmed rent on a linked lease also becomes the unit's base rent.
+    return field === "monthly_rent" ? repo.syncUnitRentFromLease(db, leaseId) : null;
   });
 }
 
 /** Link (or re-link) a lease to an existing unit and, optionally, a tenant assigned to that unit. */
+/** Record a base-rent change made to match a lease, in the same shape as a manual unit edit. */
+export function auditUnitRentSync(db: DB, change: repo.UnitRentChange | null, actor: Actor, why: string): void {
+  if (!change) return;
+  audit(db, {
+    event_type: "unit_updated",
+    actor,
+    subject: { type: "unit", id: change.unit_id },
+    payload: {
+      changes: { base_rent_cents: { from: change.from_cents, to: change.to_cents } },
+      reason: why,
+      lease_id: change.lease_id,
+    },
+  });
+}
+
 export function linkLease(db: DB, leaseId: number, unitId: string, tenantId: string | null, reason: string, userId: number) {
   const lease = repo.getLeaseRow(db, leaseId);
   if (!lease) throw new ApiError(404, "NOT_FOUND", `Lease ${leaseId} not found`);
@@ -150,7 +168,7 @@ export function linkLease(db: DB, leaseId: number, unitId: string, tenantId: str
     if (t.unit_id !== unitId) throw new ApiError(422, "TENANT_UNIT_MISMATCH", `Tenant ${tenantId} is not assigned to unit ${unitId}`);
   }
   const why = reason?.trim() || "Linked by reviewer";
-  return tx(db, () => {
+  return tx(db, (): repo.UnitRentChange | null => {
     db.prepare("UPDATE leases SET unit_id = ?, tenant_id = ? WHERE lease_id = ?").run(unitId, tenantId, leaseId);
     if (lease.unit_id !== unitId) {
       record(db, { lease_id: leaseId, field_name: "unit_link", previous_value_text: lease.unit_id, previous_status: null, new_value_text: unitId, new_status: "linked", reason: why, corrected_by: userId });
@@ -159,6 +177,8 @@ export function linkLease(db: DB, leaseId: number, unitId: string, tenantId: str
       record(db, { lease_id: leaseId, field_name: "tenant_link", previous_value_text: lease.tenant_id, previous_status: null, new_value_text: tenantId, new_status: tenantId ? "linked" : "unlinked", reason: why, corrected_by: userId });
     }
     refreshStatus(db, leaseId);
+    // The unit's base rent follows the agreement now linked to it.
+    return repo.syncUnitRentFromLease(db, leaseId);
   });
 }
 

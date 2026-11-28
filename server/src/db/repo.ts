@@ -4,7 +4,7 @@
  */
 import type { SQLInputValue } from "node:sqlite";
 import { today } from "../config.js";
-import { computeGaps, type DataGap } from "../extraction/verify.js";
+import { computeGaps, lowOcrConfidenceGaps, type DataGap } from "../extraction/verify.js";
 import type { ClauseType, FieldStatus } from "../extraction/leaseSchema.js";
 import type { DB } from "./connection.js";
 
@@ -161,6 +161,43 @@ export function daysUntil(isoDate: string, asOf = today()): number {
   return Math.round((Date.parse(`${isoDate}T00:00:00Z`) - Date.parse(`${asOf}T00:00:00Z`)) / 86_400_000);
 }
 
+export interface SourcePageRow {
+  page: number;
+  method: "text" | "ocr";
+  confidence: number | null;
+}
+
+/** How each page of a lease's source text was obtained (empty for documents ingested before OCR support). */
+export function getSourcePages(db: DB, docName: string): SourcePageRow[] {
+  return all<SourcePageRow>(
+    db,
+    `SELECT p.page, p.method, p.ocr_confidence AS confidence FROM source_document_pages p
+       JOIN source_documents s ON s.doc_id = p.doc_id WHERE s.doc_name = ? ORDER BY p.page`,
+    docName,
+  );
+}
+
+export interface UnitRentChange {
+  unit_id: string;
+  lease_id: number;
+  from_cents: number;
+  to_cents: number;
+}
+
+/**
+ * Make a unit's base rent match the monthly rent of the lease linked to it. Only a rent that is verified
+ * (or confirmed by a person) is used; a missing or needs-review rent changes nothing, and neither does an
+ * expired lease, so an old agreement never overwrites the current rent. Returns the change, if any.
+ */
+export function syncUnitRentFromLease(db: DB, leaseId: number): UnitRentChange | null {
+  const lease = getLeaseRow(db, leaseId);
+  if (!lease?.unit_id || lease.monthly_rent_cents === null || leaseState(lease) === "expired") return null;
+  const unit = getUnit(db, lease.unit_id);
+  if (!unit || unit.base_rent_cents === lease.monthly_rent_cents) return null;
+  db.prepare("UPDATE units SET base_rent_cents = ? WHERE unit_id = ?").run(lease.monthly_rent_cents, unit.unit_id);
+  return { unit_id: unit.unit_id, lease_id: leaseId, from_cents: unit.base_rent_cents, to_cents: lease.monthly_rent_cents };
+}
+
 /** Lease with state flags and data gaps, the shape the API returns. */
 export function leaseSummary(db: DB, lease: LeaseRow) {
   const sources = getFieldSources(db, lease.lease_id);
@@ -171,6 +208,7 @@ export function leaseSummary(db: DB, lease: LeaseRow) {
   );
   if (!lease.unit_id) gaps.push({ field: "unit_link", status: "needs_review", reason: "Document could not be linked to a known unit" });
   if (!lease.tenant_id) gaps.push({ field: "tenant_link", status: "needs_review", reason: "Document could not be linked to a tenant" });
+  gaps.push(...lowOcrConfidenceGaps(getSourcePages(db, lease.source_doc_name)));
 
   const state = leaseState(lease);
   const flags: string[] = [];

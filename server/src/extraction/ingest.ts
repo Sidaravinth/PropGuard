@@ -6,10 +6,10 @@
  */
 import { tx, type DB } from "../db/connection.js";
 import * as repo from "../db/repo.js";
-import { loadDocument } from "./documentText.js";
+import { loadDocument, type LoadedDocument, type LoadOptions, type TextStage } from "./documentText.js";
 import { extractLease, type ExtractionAttempt, type LlmCall } from "./extractor.js";
 import { LEASE_FIELD_NAMES, type LeaseFieldName } from "./leaseSchema.js";
-import { verifyExtraction, type DataGap, type VerifiedLease } from "./verify.js";
+import { lowOcrConfidenceGaps, verifyExtraction, type DataGap, type VerifiedLease } from "./verify.js";
 
 export interface IngestResult {
   lease_id: number;
@@ -19,6 +19,17 @@ export interface IngestResult {
   gaps: DataGap[];
   attempts: ExtractionAttempt[];
   replaced_existing: boolean;
+  /** The linked unit's base rent, changed to match this agreement's verified monthly rent (null if unchanged). */
+  unit_rent_synced: repo.UnitRentChange | null;
+  /** What the inspection and text-extraction step found. */
+  text: { format: LoadedDocument["format"]; page_count: number; text_method: LoadedDocument["textMethod"]; pages: LoadedDocument["pageMeta"] };
+}
+
+/** Stages reported while a document is processed, so callers can show progress. */
+export type IngestStage = TextStage | "ai_extraction";
+export interface IngestOptions {
+  ocr?: LoadOptions["ocr"];
+  onStage?: (stage: IngestStage) => void;
 }
 
 /** Replacing this document would destroy or detach human work, so it is refused. */
@@ -41,9 +52,11 @@ export async function ingestLeaseDocument(
   db: DB,
   input: { docName: string; bytes: Buffer },
   llm: LlmCall,
+  opts: IngestOptions = {},
 ): Promise<IngestResult> {
-  const doc = await loadDocument(input.docName, input.bytes);
-  refuseIfHistory(db, doc.docName); // before spending a model call
+  refuseIfHistory(db, input.docName); // before spending OCR time or a model call
+  const doc = await loadDocument(input.docName, input.bytes, { ocr: opts.ocr, onStage: opts.onStage });
+  opts.onStage?.("ai_extraction");
   const outcome = await extractLease(doc, llm);
 
   const verified: VerifiedLease | null = outcome.extraction ? verifyExtraction(outcome.extraction, doc.pages) : null;
@@ -60,6 +73,10 @@ export async function ingestLeaseDocument(
     db.prepare("INSERT INTO source_documents (doc_name, sha256, mime_type, page_count, raw_text) VALUES (?, ?, ?, ?, ?)").run(
       doc.docName, doc.sha256, doc.mimeType, doc.pages.length, doc.pages.join("\f"),
     );
+
+    const docId = (db.prepare("SELECT doc_id FROM source_documents WHERE doc_name = ?").get(doc.docName) as { doc_id: number }).doc_id;
+    const insPage = db.prepare("INSERT INTO source_document_pages (doc_id, page, method, ocr_confidence) VALUES (?, ?, ?, ?)");
+    doc.pageMeta.forEach((m, i) => insPage.run(docId, i + 1, m.method, m.confidence));
 
     // Link to a known unit and tenant using ONLY verified values.
     const v = (name: LeaseFieldName) => verified?.fields[name].value ?? null;
@@ -84,6 +101,7 @@ export async function ingestLeaseDocument(
     const gaps = verified ? [...verified.gaps] : LEASE_FIELD_NAMES.map((f) => ({ field: f, status: "needs_review" as const, reason: failureNote }));
     if (!unitId) gaps.push({ field: "unit_link", status: "needs_review", reason: "Document could not be linked to a known unit" });
     if (!tenantId) gaps.push({ field: "tenant_link", status: "needs_review", reason: "Document could not be linked to a tenant" });
+    gaps.push(...lowOcrConfidenceGaps(doc.pageMeta.map((m, i) => ({ page: i + 1, ...m }))));
     const status: IngestResult["extraction_status"] = gaps.length === 0 ? "complete" : "needs_review";
 
     const num = (name: LeaseFieldName) => {
@@ -129,14 +147,19 @@ export async function ingestLeaseDocument(
       );
     }
 
+    // The unit's base rent follows the agreement it is linked to (verified rent only).
+    const unitRentSynced = repo.syncUnitRentFromLease(db, leaseId);
+
     return {
       lease_id: leaseId,
+      unit_rent_synced: unitRentSynced,
       source_doc_name: doc.docName,
       extraction_status: status,
       linked: { unit_id: unitId, tenant_id: tenantId, tenant_created: tenantCreated },
       gaps,
       attempts: outcome.attempts,
       replaced_existing: Boolean(existing),
+      text: { format: doc.format, page_count: doc.pages.length, text_method: doc.textMethod, pages: doc.pageMeta },
     };
   });
 }

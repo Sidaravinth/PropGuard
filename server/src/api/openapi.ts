@@ -155,6 +155,19 @@ export const openapi = {
     "/leases/{id}/source": {
       get: { tags: ["leases"], summary: "Extracted text of the source document, per page", parameters: [idParam("id", "Lease id")], responses: { 200: ok("Pages"), 404: err("Not found") } },
     },
+    "/leases/{id}/qa": {
+      get: { tags: ["leases"], summary: "Your grounded Q&A conversation about this lease", parameters: [idParam("id", "Lease id")], responses: { 200: ok("Messages, oldest first"), 404: err("Not found") } },
+      post: {
+        tags: ["leases"], summary: "Ask a question answered only from this lease's text, with citations",
+        description:
+          "Retrieves the most relevant excerpts of this lease's own text (BM25), asks the model for structured statements that each cite an excerpt with an exact quote, " +
+          "and checks every quote, citation and number in code. Answers that fail the checks are retried once, then replaced by the fixed not-found sentence. Read-only.",
+        parameters: [idParam("id", "Lease id")],
+        requestBody: { required: true, content: { "application/json": { schema: { type: "object", required: ["question"], properties: { question: { type: "string", maxLength: 500 } } } } } },
+        responses: { 200: ok("Updated conversation"), 409: err("A question about this lease is already being answered"), 422: err("Lease has no source text"), 503: err("Model unavailable") },
+      },
+      delete: { tags: ["leases"], summary: "Clear your conversation about this lease (others' are untouched)", parameters: [idParam("id", "Lease id")], responses: { 200: ok("Number of messages removed"), 404: err("Not found") } },
+    },
     "/leases/{id}/corrections": {
       get: { tags: ["leases"], summary: "Correction history (who changed what, when, why)", parameters: [idParam("id", "Lease id")], responses: { 200: ok("Corrections") } },
     },
@@ -180,13 +193,28 @@ export const openapi = {
     },
     "/documents/leases": {
       post: {
-        tags: ["documents"], summary: "Upload a lease (saves original, then extracts)",
-        description: "The original file is stored before extraction. Identical files are rejected (409). If extraction fails the document is kept with status `failed` and can be retried.",
+        tags: ["documents"], summary: "Upload a lease (saves original, reads text with OCR where needed, then extracts)",
+        description:
+          "Accepts .pdf (text or scanned), .txt, .docx, .png and .jpg. The original file is stored before extraction. Identical files are rejected (409). " +
+          "Scanned PDF pages and images are read with local OCR (tesseract.js) before AI extraction. If extraction fails the document is kept with status `failed` and can be retried. " +
+          "With `mode=async` the response is 202 as soon as the file is stored; poll GET /documents/{id} for `processing_stage` (uploaded, text_extraction, ocr, ai_extraction) and the final status.",
+        parameters: [{ name: "mode", in: "query", schema: { type: "string", enum: ["sync", "async"] } }],
         requestBody: { required: true, content: { "multipart/form-data": { schema: { type: "object", required: ["file"], properties: { file: { type: "string", format: "binary" } } } } } },
-        responses: { 201: ok("Document record and extracted lease (if any)"), 409: err("Duplicate file"), 422: err("Unsupported file type") },
+        responses: { 201: ok("Document record and extracted lease (if any)"), 202: ok("Stored; processing continues in the background"), 409: err("Duplicate file"), 422: err("Unsupported file type or contents do not match the extension") },
       },
     },
-    "/documents/{id}": { get: { tags: ["documents"], summary: "One document record", parameters: [idParam("id", "Document id")], responses: { 200: ok("Document"), 404: err("Not found") } } },
+    "/documents/{id}": {
+      get: { tags: ["documents"], summary: "One document record", parameters: [idParam("id", "Document id")], responses: { 200: ok("Document"), 404: err("Not found") } },
+      delete: {
+        tags: ["documents"],
+        summary: "Delete a lease document, its stored original and the lease extracted from it",
+        description:
+          "Removes the document record, the original file, and the lease extracted from it (fields, clauses, corrections, Q&A history, deposit held). Units and tenants are kept. " +
+          "Refused (409) while the document is processing, or when the lease has Decision Briefs, a renewal offer or deposit charges. Audited as document_deleted.",
+        parameters: [idParam("id", "Document id")],
+        responses: { 200: ok("What was removed"), 404: err("Not found"), 409: err("Still processing, or the lease has history"), 422: err("Not a lease document") },
+      },
+    },
     "/documents/{id}/file": {
       get: { tags: ["documents"], summary: "Original uploaded file, byte for byte", parameters: [idParam("id", "Document id"), { name: "download", in: "query", schema: { type: "string", enum: ["1"] } }], responses: { 200: { description: "The file" }, 404: err("Not found") } },
     },

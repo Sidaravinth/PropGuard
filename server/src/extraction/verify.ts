@@ -14,6 +14,9 @@ import {
   type LeaseFieldName,
 } from "./leaseSchema.js";
 
+/** Pages read by OCR below this mean confidence (0–100) are flagged for review. */
+export const LOW_OCR_CONFIDENCE = 70;
+
 export interface VerifiedField {
   name: LeaseFieldName;
   /** Normalised value as text (cents for money, YYYY-MM-DD for dates). Kept even for needs_review, for the reviewer. */
@@ -240,6 +243,17 @@ export function verifyExtraction(extraction: LeaseExtraction, pages: string[]): 
     clauses,
   );
   return { fields, clauses, gaps };
+}
+
+/** Pages whose text came from OCR with low confidence: values read from them deserve a second look. */
+export function lowOcrConfidenceGaps(pages: { page: number; method: "text" | "ocr"; confidence: number | null }[]): DataGap[] {
+  return pages
+    .filter((p) => p.method === "ocr" && p.confidence !== null && p.confidence < LOW_OCR_CONFIDENCE)
+    .map((p) => ({
+      field: "ocr_page:" + p.page,
+      status: "needs_review" as const,
+      reason: "Page " + p.page + " was read by OCR with low confidence (" + Math.round(p.confidence!) + "%). Check its values against the original.",
+    }));
 }
 
 /**

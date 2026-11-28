@@ -26,16 +26,25 @@ export function Modal({ title, onClose, children, footer, wide }: { title: strin
   );
 }
 
-const FIELD_STATUS: Record<string, { label: string; tone: string }> = {
-  extracted: { label: "Verified", tone: "success" },
-  corrected: { label: "Corrected", tone: "info" },
-  needs_review: { label: "Needs review", tone: "warning" },
-  missing: { label: "Missing", tone: "danger" },
+/** Explicit (quoted and checked against the source) versus everything that is not trusted yet. */
+const FIELD_STATUS: Record<string, { label: string; tone: string; title: string }> = {
+  extracted: { label: "Verified", tone: "success", title: "Stated explicitly in the document: the quoted excerpt was checked word for word against the source text." },
+  corrected: { label: "Corrected", tone: "info", title: "Entered or confirmed by a person." },
+  needs_review: {
+    label: "Needs review",
+    tone: "warning",
+    title: "Unclear, conflicting, or an AI reading the source text does not confirm. Not used until a person confirms it.",
+  },
+  missing: { label: "Missing", tone: "danger", title: "Not stated in the document. No value was guessed." },
 };
 
 export function FieldStatusBadge({ status }: { status: string }) {
-  const s = FIELD_STATUS[status] ?? { label: status, tone: "" };
-  return <span className={`badge badge-${s.tone}`}>{s.label}</span>;
+  const s = FIELD_STATUS[status] ?? { label: status, tone: "", title: "" };
+  return (
+    <span className={`badge badge-${s.tone}`} title={s.title}>
+      {s.label}
+    </span>
+  );
 }
 
 const LEASE_FLAG: Record<string, { label: string; tone: string }> = {

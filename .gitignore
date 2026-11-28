@@ -12,3 +12,6 @@ coverage/
 
 # Uploaded originals (local document store)
 data/uploads/
+
+# Backups written by npm run reset-data
+data/backups/

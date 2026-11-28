@@ -1,17 +1,19 @@
-import { ArrowLeft, ChevronDown, ChevronRight, Download, ExternalLink, FileText, Link2, PencilLine, TextSearch } from "lucide-react";
+import { ArrowLeft, ChevronDown, ChevronRight, Download, ExternalLink, FileText, Link2, MessageSquareText, PencilLine, ScanText, TextSearch, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Link, useParams } from "react-router";
+import { Link, useNavigate, useParams } from "react-router";
 import { ApiRequestError } from "../../api/client";
 import { leasesApi, type ClauseType, type Correction, type FieldSource, type LeaseDetail } from "../../api/leases";
 import { useAuth } from "../../auth/AuthContext";
 import { Alert, Card, EmptyState, FieldStatusBadge, LeaseFlagBadges, LeaseStateBadge, PageHeader } from "../../components/ui";
-import { CLAUSE_LABEL, FIELD_META, formatCents, formatDate, formatFieldValue, gapLabel } from "../../lib/format";
+import { CLAUSE_LABEL, FIELD_META, formatCents, formatDate, formatFieldValue, gapLabel, OCR_WARNING, textMethodLabel } from "../../lib/format";
 import { CorrectFieldDialog } from "./CorrectFieldDialog";
 import { LinkDialog } from "./LinkDialog";
+import { DeleteDocumentDialog } from "./DeleteDocumentDialog";
+import { QaPanel } from "./QaPanel";
 import { SourceViewer, type Highlight } from "./SourceViewer";
 
 const TERM_FIELDS = ["start_date", "end_date", "monthly_rent", "security_deposit", "notice_period_days", "repair_deductible"] as const;
-const PARTY_FIELDS = ["tenant_name", "property_name", "unit_number"] as const;
+const PARTY_FIELDS = ["tenant_name", "landlord_name", "property_name", "unit_number"] as const;
 
 const sourceRef = (section: string | null, page: number | null) => [section, page ? `p. ${page}` : null].filter(Boolean).join(" · ") || "—";
 
@@ -136,6 +138,9 @@ export function LeaseDetailPage() {
   const [activeField, setActiveField] = useState<string | null>(null);
   const [editing, setEditing] = useState<FieldSource | null>(null);
   const [linking, setLinking] = useState(false);
+  const [sideTab, setSideTab] = useState<"source" | "ask">("source");
+  const [deleting, setDeleting] = useState(false);
+  const navigate = useNavigate();
 
   const load = useCallback(async () => {
     try {
@@ -160,6 +165,7 @@ export function LeaseDetailPage() {
   const canEdit = can("records.write");
   const show = (f: FieldSource) => {
     setActiveField(f.field_name);
+    setSideTab("source");
     setHighlight({ page: f.page, text: f.verbatim_snippet! });
   };
   const saved = (l: LeaseDetail) => {
@@ -187,6 +193,11 @@ export function LeaseDetailPage() {
               <a className="btn btn-secondary" href={leasesApi.fileUrl(lease.document.document_id, true)}>
                 <Download size={16} aria-hidden /> Download
               </a>
+              {canEdit && (
+                <button className="btn btn-danger" onClick={() => setDeleting(true)}>
+                  <Trash2 size={16} aria-hidden /> Delete
+                </button>
+              )}
             </>
           )
         }
@@ -226,6 +237,15 @@ export function LeaseDetailPage() {
           <div className="summary-label">Source</div>
           <div className="small">{lease.source_doc_name}</div>
           <div className="muted small">Extracted {formatDate(lease.created_at)}</div>
+          {lease.text_source && lease.text_source.method !== "text" && (
+            <span
+              className="badge badge-warning"
+              title={`OCR was used for page(s) ${lease.text_source.ocr_pages.join(", ")} of ${lease.text_source.page_count}`}
+            >
+              <ScanText size={12} aria-hidden /> {textMethodLabel(lease.text_source.method)}
+              {lease.text_source.average_ocr_confidence !== null && ` · ${lease.text_source.average_ocr_confidence}% confidence`}
+            </span>
+          )}
         </div>
       </div>
 
@@ -247,6 +267,16 @@ export function LeaseDetailPage() {
       <div className="review-layout">
         <div className="review-main">
           <Card title="Lease terms" subtitle="Click a source reference to see the exact excerpt in the document" className="mb">
+            <details className="ocr-notice">
+              <summary>
+                <ScanText size={14} aria-hidden /> About extracted data{lease.text_source && lease.text_source.method !== "text" ? ": this document was read with OCR" : ""}
+              </summary>
+              <p>{OCR_WARNING}</p>
+              <p className="muted">
+                <strong>Verified</strong> values are stated explicitly in the agreement and their quote was checked word for word against the source
+                text. <strong>Needs review</strong> and <strong>Missing</strong> values are never used by the policy engine until a person confirms them.
+              </p>
+            </details>
             <FieldRows fields={pick(TERM_FIELDS)} canEdit={canEdit} onShow={show} onCorrect={setEditing} active={activeField} />
           </Card>
 
@@ -283,6 +313,7 @@ export function LeaseDetailPage() {
               lease={lease}
               onShow={(h) => {
                 setActiveField(null);
+                setSideTab("source");
                 setHighlight(h);
               }}
             />
@@ -294,14 +325,52 @@ export function LeaseDetailPage() {
         </div>
 
         <aside className="review-side">
-          <Card title="Source document" subtitle={lease.source_doc_name}>
-            {pages === null ? <div className="spinner" aria-label="Loading" /> : pages.length ? <SourceViewer pages={pages} highlight={highlight} /> : <p className="muted">Source text unavailable.</p>}
+          <Card
+            title={sideTab === "source" ? "Source document" : "Ask this agreement"}
+            subtitle={lease.source_doc_name}
+            actions={
+              <div className="chips" role="tablist" aria-label="Side panel">
+                <button role="tab" aria-selected={sideTab === "source"} className={`chip${sideTab === "source" ? " active" : ""}`} onClick={() => setSideTab("source")}>
+                  <FileText size={13} aria-hidden /> Source
+                </button>
+                <button role="tab" aria-selected={sideTab === "ask"} className={`chip${sideTab === "ask" ? " active" : ""}`} onClick={() => setSideTab("ask")}>
+                  <MessageSquareText size={13} aria-hidden /> Ask
+                </button>
+              </div>
+            }
+          >
+            {sideTab === "ask" ? (
+              <QaPanel
+                leaseId={lease.lease_id}
+                isPdf={lease.document?.mime_type === "application/pdf"}
+                onCite={(c) => {
+                  setActiveField(null);
+                  setHighlight({ page: c.page, text: c.quote });
+                  setSideTab("source");
+                }}
+              />
+            ) : pages === null ? (
+              <div className="spinner" aria-label="Loading" />
+            ) : pages.length ? (
+              <SourceViewer pages={pages} highlight={highlight} />
+            ) : (
+              <p className="muted">Source text unavailable.</p>
+            )}
           </Card>
         </aside>
       </div>
 
       {editing && <CorrectFieldDialog leaseId={lease.lease_id} field={editing} onClose={() => setEditing(null)} onSaved={saved} />}
       {linking && <LinkDialog lease={lease} onClose={() => setLinking(false)} onSaved={saved} />}
+      {deleting && lease.document && (
+        <DeleteDocumentDialog
+          documentId={lease.document.document_id}
+          docName={lease.document.doc_name}
+          hasLease
+          onClose={() => setDeleting(false)}
+          onDeleted={() => navigate("/leases")}
+        />
+      )}
     </>
   );
 }

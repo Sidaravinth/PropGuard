@@ -73,7 +73,7 @@ export function createRouter(db: DB, deps: { llm: () => LlmCall }): Router {
   });
 
   r.post("/leases/ingest", requirePermission("records.write"), upload.single("file"), async (req, res) => {
-    if (!req.file) throw new ApiError(400, "FILE_REQUIRED", 'Upload the lease as multipart/form-data field "file" (.pdf or .txt)');
+    if (!req.file) throw new ApiError(400, "FILE_REQUIRED", 'Upload the lease as multipart/form-data field "file" (.pdf, .txt, .docx, .png or .jpg)');
     const docName = req.file.originalname.replace(/[^\w.\- ]+/g, "_");
     const result = await auditedIngest(db, { docName, bytes: req.file.buffer }, deps.llm(), humanActor(req.auth!.user), "api");
     const lease = repo.getLeaseRow(db, result.lease_id)!;
