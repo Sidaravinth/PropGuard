@@ -1,6 +1,6 @@
 # PropGuard — Day 2 Notes
 
-Day 2 is built in groups (A–F). The full README comes in Group F; this file records each group as it lands.
+Day 2 was built in groups. This file records Groups A and B as they landed. The agent, Decision Inbox, audit trail and evaluation that followed, and all later fixes, are described in [README.md](README.md), which is the current reference.
 
 ## Group A — Authentication and application shell
 
@@ -81,7 +81,7 @@ Failed uploads appear under **Uploads that need attention**, with a **Retry** bu
 3. Run the Day 1 pipeline unchanged: page text, LLM extraction with Zod validation and retry, deterministic verification, linking, and storage of fields, clauses and evidence.
 4. Set the status to `extracted`, `needs_review` or `failed`, with an error code. A failure never deletes the original, and **Retry** re-runs extraction from the stored file. An upload still `processing` when the server stops is marked `failed` (`INTERRUPTED`) at the next start.
 
-A different file with an existing name is stored as `name (2).pdf`. The Day 1 endpoint `POST /api/leases/ingest` and `npm run ingest` still work, but they skip the document store and are kept only for the Day 1 tests and tooling.
+A different file with an existing name is stored as `name (2).pdf`. The Day 1 endpoint `POST /api/leases/ingest` and `npm run ingest` still work but skip the document store. Both are audited, and they refuse to replace a lease that has history (`LEASE_HAS_HISTORY`).
 
 ### Corrections
 
@@ -119,7 +119,7 @@ Every module starts empty, and all data comes from users. A fresh database shows
 | **Properties & Units** | Add or edit properties (name, address) and units (number, base rent). Filter by available or occupied, by property, or by search. Each unit page shows its tenants, leases and tickets. Renaming a property renames it on its units, so lease linking keeps working. |
 | **Tenants** | Add or edit tenants (name, email, phone, unit, status), or import them from CSV/XLSX. Filter by status, or show only tenants owing rent. The profile shows unit, outstanding rent, lease history, payment history and maintenance history. Duplicates are refused: email is unique, and a name can appear only once per unit. |
 | **Payment Ledger** | Add or update monthly entries, or import CSV/XLSX. Shows outstanding balance, overdue tenants and this month's due and collected amounts. Filters: overdue, outstanding, settled, and by tenant. The status comes from the amounts (paid, partial or unpaid, plus "paid late"). A contradictory status is rejected, and so is a second entry for the same tenant and month. |
-| **Maintenance** | Create a ticket by choosing property, unit and tenant, then entering the work order estimate, technician quote and an optional tenant charge. The policy check runs on save. The list shows verdict, approver and status, with filters for exceptions and needs-approval. The ticket page shows exceptions, the tenant/owner cost split, the rule trace, the governing lease (deductible and deposit), a re-run button and check history. Decision Briefs show an empty state until Group C. |
+| **Maintenance** | Create a ticket by choosing property, unit and tenant, then entering the work order estimate, technician quote and an optional tenant charge. The policy check runs on save. The list shows verdict, approver and status, with filters for exceptions and needs-approval. The ticket page shows exceptions, the tenant/owner cost split, the rule trace, the governing lease (deductible and deposit), a re-run button, check history and the ticket's Decision Briefs. |
 | **Dashboard** | The 8 summary cards, plus lease, maintenance and payment overviews and recent activity, all from `GET /api/dashboard` at request time. No numbers are stored or invented. |
 
 ### Spreadsheet imports

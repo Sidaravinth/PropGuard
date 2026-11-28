@@ -21,12 +21,29 @@ export interface IngestResult {
   replaced_existing: boolean;
 }
 
+/** Replacing this document would destroy or detach human work, so it is refused. */
+export class LeaseHasHistoryError extends Error {
+  constructor(
+    readonly leaseId: number,
+    readonly reasons: string[],
+    docName: string,
+  ) {
+    super(`"${docName}" cannot be replaced: lease #${leaseId} has history (${reasons.join("; ")}). Upload the new document under a different name, or correct the lease instead.`);
+  }
+}
+
+function refuseIfHistory(db: DB, docName: string): void {
+  const history = repo.leaseHistory(db, docName);
+  if (history) throw new LeaseHasHistoryError(history.lease_id, history.reasons, docName);
+}
+
 export async function ingestLeaseDocument(
   db: DB,
   input: { docName: string; bytes: Buffer },
   llm: LlmCall,
 ): Promise<IngestResult> {
   const doc = await loadDocument(input.docName, input.bytes);
+  refuseIfHistory(db, doc.docName); // before spending a model call
   const outcome = await extractLease(doc, llm);
 
   const verified: VerifiedLease | null = outcome.extraction ? verifyExtraction(outcome.extraction, doc.pages) : null;
@@ -35,6 +52,7 @@ export async function ingestLeaseDocument(
   }`;
 
   return tx(db, () => {
+    refuseIfHistory(db, doc.docName); // again: a person may have acted while the model was reading
     const existing = db.prepare("SELECT doc_id FROM source_documents WHERE doc_name = ?").get(doc.docName);
     // Cascades to the lease, its field sources, clauses and deposit entries.
     if (existing) db.prepare("DELETE FROM source_documents WHERE doc_name = ?").run(doc.docName);

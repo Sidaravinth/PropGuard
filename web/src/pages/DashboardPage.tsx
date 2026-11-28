@@ -5,6 +5,7 @@ import { useAuth } from "../auth/AuthContext";
 import { Alert, ApproverBadge, Card, EmptyState, PageHeader, StatCard, VerdictBadge } from "../components/ui";
 import { formatCents, formatDate } from "../lib/format";
 import { useLoad } from "../lib/useLoad";
+import { BriefStatusBadge } from "./inbox/badges";
 
 const monthLabel = (m: string) => new Date(`${m}-01T00:00:00Z`).toLocaleDateString(undefined, { month: "long", year: "numeric", timeZone: "UTC" });
 
@@ -167,8 +168,36 @@ function Overview({ d }: { d: Dashboard }) {
               ))}
             </ul>
           )}
-          <h3 className="section-title">Decision Briefs and approvals</h3>
-          <p className="muted small list-empty">None yet. Briefs and approvals arrive with the AI agent and Decision Inbox.</p>
+          <h3 className="section-title">Decision Briefs</h3>
+          {d.activity.briefs.length === 0 ? (
+            <p className="muted small list-empty">No briefs yet. Run the agent from the Decision Inbox.</p>
+          ) : (
+            <ul className="plain-list compact">
+              {d.activity.briefs.map((b) => (
+                <li key={b.brief_id}>
+                  <Link to={`/inbox/${b.brief_id}`}>#{b.brief_id}</Link> {b.title}
+                  <span className="list-meta">
+                    <BriefStatusBadge status={b.status} />
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+          <h3 className="section-title">Recent decisions</h3>
+          {d.activity.approvals.length === 0 ? (
+            <p className="muted small list-empty">No decisions yet.</p>
+          ) : (
+            <ul className="plain-list compact">
+              {d.activity.approvals.map((a) => (
+                <li key={a.brief_id}>
+                  <Link to={`/inbox/${a.brief_id}`}>#{a.brief_id}</Link> {a.title} <span className="muted small">by {a.decided_by}</span>
+                  <span className="list-meta">
+                    <BriefStatusBadge status={a.status} />
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
         </Card>
       </div>
     </>

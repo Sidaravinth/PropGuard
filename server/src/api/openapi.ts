@@ -1,4 +1,4 @@
-/** OpenAPI 3.1 description of the Day 1 API (served at /openapi.json, UI at /docs). */
+/** OpenAPI 3.1 description of the API (served at /openapi.json, UI at /docs). tests/openapi.test.ts keeps it complete. */
 const idParam = (name: string, desc: string, type: "string" | "integer" = "integer") => ({
   name, in: "path", required: true, description: desc, schema: { type },
 });
@@ -9,9 +9,10 @@ export const openapi = {
   openapi: "3.1.0",
   info: {
     title: "PropGuard API",
-    version: "2.2.0-day2b",
+    version: "2.3.0",
     description:
-      "Lease ingestion, structured lease data with source citations, maintenance tickets and the deterministic policy engine.\n\n" +
+      "Lease ingestion, structured lease data with source citations, maintenance tickets, the deterministic policy engine, " +
+      "AI-drafted Decision Briefs, human decisions, deposit reservations and the audit trail.\n\n" +
       "**All money values are integer cents** (e.g. 150000 = $1,500.00).",
   },
   servers: [{ url: "/api" }],
@@ -127,7 +128,7 @@ export const openapi = {
         description:
           "Extracts structured terms + clauses with schema validation and retry, verifies every value against the source text, " +
           "links the lease to a unit/tenant and stores field-level source references. Missing/ambiguous values are flagged, never guessed. " +
-          "Re-uploading a file with the same name replaces the earlier version.",
+          "Re-uploading a file with the same name replaces the earlier version, unless that lease has history (a UI upload, corrections, briefs, renewal offers or deposit charges). Every attempt is audited.",
         requestBody: {
           required: true,
           content: { "multipart/form-data": { schema: { type: "object", properties: { file: { type: "string", format: "binary" } }, required: ["file"] } } },
@@ -135,6 +136,7 @@ export const openapi = {
         responses: {
           201: ok("Ingest result with lease, per-field sources, clauses and gaps"),
           400: err("No file"),
+          409: err("LEASE_HAS_HISTORY: replacing this document would destroy or detach human work"),
           422: err("Unsupported/empty document"),
           503: err("LLM unavailable (not configured, quota exhausted or provider error)"),
         },
@@ -268,6 +270,100 @@ export const openapi = {
         description: "3-way verification (work order vs quote vs lease deductible + ledger), approval threshold gating and security-deposit cap. Pure code — no AI involved.",
         parameters: [idParam("id", "Ticket id")],
         responses: { 200: ok("Policy evaluation with inputs, sources, verdict, approver and rule trace"), 404: err("Not found") },
+      },
+    },
+    "/agent/candidates": {
+      get: { tags: ["agent"], summary: "What the agent can draft: leases in their renewal window and flagged tickets, with any pending brief", responses: { 200: ok("Renewal and maintenance candidates") } },
+    },
+    "/agent/renewals/run": {
+      post: { tags: ["agent"], summary: "Draft a renewal brief for every candidate without a pending one", responses: { 200: ok("Per-lease result: brief id, skipped or error"), 503: err("Model unavailable") } },
+    },
+    "/agent/maintenance/run": {
+      post: { tags: ["agent"], summary: "Draft a resolution brief for every flagged ticket without a pending one", responses: { 200: ok("Per-ticket result: brief id, skipped or error"), 503: err("Model unavailable") } },
+    },
+    "/agent/renewals/{leaseId}": {
+      post: {
+        tags: ["agent"], summary: "Draft a renewal brief for one lease (replaces its pending brief)",
+        description: "Read-only tools gather evidence; prices and dates are computed in code. Three options, each with its own notice. The agent cannot approve anything.",
+        parameters: [idParam("leaseId", "Lease id")],
+        responses: { 201: ok("Brief with figures, evidence, grounding report and audit entries"), 409: err("This term's renewal is already approved, or a run is in progress"), 422: err("Lease is not in its renewal window"), 502: err("Model produced no valid brief"), 503: err("Model unavailable") },
+      },
+    },
+    "/agent/maintenance/{ticketId}": {
+      post: {
+        tags: ["agent"], summary: "Draft a resolution brief for one flagged ticket (replaces its pending brief)",
+        description: "Explains the policy engine's exceptions and proposes two options, each with its own follow-up message.",
+        parameters: [idParam("ticketId", "Ticket id")],
+        responses: { 201: ok("Brief with figures, evidence, policy result, grounding report and audit entries"), 409: err("Ticket already closed, or a run is in progress"), 422: err("Ticket has no policy exceptions"), 502: err("Model produced no valid brief"), 503: err("Model unavailable") },
+      },
+    },
+    "/briefs": {
+      get: {
+        tags: ["briefs"], summary: "Decision Inbox: briefs with priority and required approver",
+        parameters: [
+          { name: "status", in: "query", schema: { type: "string", enum: ["pending", "approved", "rejected", "revision_requested", "superseded"] } },
+          { name: "type", in: "query", schema: { type: "string", enum: ["renewal", "maintenance"] } },
+        ],
+        responses: { 200: ok("Briefs") },
+      },
+    },
+    "/briefs/{id}": {
+      get: { tags: ["briefs"], summary: "One brief: options, evidence citations, policy result, charge warning, agent tool calls and audit history", parameters: [idParam("id", "Brief id")], responses: { 200: ok("Brief"), 404: err("Not found") } },
+    },
+    "/briefs/{id}/decision": {
+      post: {
+        tags: ["decisions"], summary: "Approve (selecting an option), reject or request revision. The only way a brief is finalised",
+        description:
+          "On approval the server re-checks the caller's role, re-verifies every figure and policy amount against current records, applies the deposit cap, " +
+          "executes the simulated action (only the selected option's message is sent) and audits it in one transaction. Rejecting a brief does not close its ticket.",
+        parameters: [idParam("id", "Brief id")],
+        requestBody: { required: true, content: { "application/json": { schema: { type: "object", additionalProperties: false, required: ["decision"], properties: { decision: { type: "string", enum: ["approve", "reject", "request_revision"] }, option_key: { type: ["string", "null"] }, comment: { type: ["string", "null"] } } } } } },
+        responses: { 200: ok("Brief with its decision and audit entries"), 400: err("Option required"), 403: err("Role does not cover the required tier"), 409: err("Not pending, stale, blocked by policy, ungrounded, outdated format, or already decided") },
+      },
+    },
+    "/audit": {
+      get: {
+        tags: ["audit"], summary: "Audit trail (read-only; no endpoint edits or deletes entries)",
+        parameters: [
+          ...["event_type", "actor", "subject_type", "subject_id", "q"].map((name) => ({ name, in: "query", schema: { type: "string" } })),
+          { name: "actor_type", in: "query", schema: { type: "string", enum: ["human", "agent", "system"] } },
+          { name: "brief_id", in: "query", schema: { type: "integer" } },
+          { name: "from", in: "query", schema: { type: "string", format: "date" } },
+          { name: "to", in: "query", schema: { type: "string", format: "date" } },
+          { name: "limit", in: "query", schema: { type: "integer", minimum: 1, maximum: 200 } },
+          { name: "offset", in: "query", schema: { type: "integer", minimum: 0 } },
+        ],
+        responses: { 200: ok("Total, event types and matching entries with hashes") },
+      },
+    },
+    "/audit/verify": {
+      get: { tags: ["audit"], summary: "Recompute the hash chain and report the first broken entry, if any", responses: { 200: ok("Chain status") } },
+    },
+    "/tickets/{id}/decision": {
+      post: {
+        tags: ["decisions"], summary: "Approve or reject a ticket that is over the auto-approval limit and has no exceptions",
+        description:
+          "The policy engine is re-run first. The caller's role must cover the engine's tier (> $200 Property Manager, > $1,000 Regional Director). " +
+          "Approval records the cost basis (higher of work order and quote) and reserves any proposed tenant charge. Tickets with exceptions are decided through a Decision Brief.",
+        parameters: [idParam("id", "Ticket id")],
+        requestBody: { required: true, content: { "application/json": { schema: { type: "object", additionalProperties: false, required: ["decision"], properties: { decision: { type: "string", enum: ["approve", "reject"] }, comment: { type: ["string", "null"] } } } } } },
+        responses: { 200: ok("Decision, ticket and any deposit reservation"), 403: err("Role does not cover the required tier"), 409: err("Has exceptions, needs no approval, or already closed") },
+      },
+    },
+    "/deposit-reservations/{id}/collect": {
+      post: {
+        tags: ["deposit"], summary: "Record collection of a reserved tenant charge",
+        description: "Moves the amount from reserved to collected by adding one deposit deduction in the same transaction. Requires the ticket's approval tier.",
+        parameters: [idParam("id", "Reservation id")],
+        responses: { 200: ok("Reservation"), 403: err("Role does not cover the required tier"), 409: err("Not reserved, or the recorded deposit no longer covers it") },
+      },
+    },
+    "/deposit-reservations/{id}/release": {
+      post: {
+        tags: ["deposit"], summary: "Release a reserved tenant charge that was cancelled",
+        parameters: [idParam("id", "Reservation id")],
+        requestBody: { required: true, content: { "application/json": { schema: { type: "object", additionalProperties: false, required: ["reason"], properties: { reason: { type: "string", minLength: 3 } } } } } },
+        responses: { 200: ok("Reservation"), 403: err("Role does not cover the required tier"), 409: err("Not reserved") },
       },
     },
     "/tickets/{id}/policy-evaluations": {

@@ -1,9 +1,14 @@
 import { ArrowLeft, Bot, CheckCircle2, ChevronDown, ChevronRight, CircleAlert, LoaderCircle, ShieldCheck, XCircle } from "lucide-react";
 import { useState } from "react";
-import { Link, useParams } from "react-router";
-import { recordsApi, type Evaluation } from "../../api/records";
+import { Link, useNavigate, useParams } from "react-router";
+import { briefsApi } from "../../api/briefs";
+import { recordsApi, type Evaluation, type TicketDetail } from "../../api/records";
+import { BriefStatusBadge } from "../inbox/badges";
+import { DepositCharges, depositText } from "./DepositCharges";
+import { TicketApproval } from "./TicketApproval";
 import { useAuth } from "../../auth/AuthContext";
-import { Alert, ApproverBadge, Card, EmptyState, LeaseFlagBadges, LeaseStateBadge, PageHeader, TicketStatusBadge, VerdictBadge } from "../../components/ui";
+import { ChargeWarning } from "../../components/ChargeWarning";
+import { Alert, ApproverBadge, Card, LeaseFlagBadges, LeaseStateBadge, PageHeader, TicketStatusBadge, VerdictBadge } from "../../components/ui";
 import { formatCents, formatDate } from "../../lib/format";
 import { errorMessage, useLoad } from "../../lib/useLoad";
 
@@ -47,7 +52,7 @@ function PolicyResult({ ev }: { ev: Evaluation }) {
       )}
       {(r.threeWay?.tenantShareCents !== undefined || r.threeWay?.ownerShareCents !== undefined) && (
         <dl className="details compact mt">
-          <dt>Tenant pays</dt>
+          <dt>Tenant share under the deductible</dt>
           <dd>{r.threeWay.tenantShareCents === null ? "Unknown (no verified deductible)" : formatCents(r.threeWay.tenantShareCents as number)}</dd>
           <dt>Owner pays</dt>
           <dd>{r.threeWay.ownerShareCents === null ? "Unknown" : formatCents(r.threeWay.ownerShareCents as number)}</dd>
@@ -111,6 +116,16 @@ export function TicketDetailPage() {
         }
       />
       {runError && <Alert tone="error">{runError}</Alert>}
+      {t.unresolved_brief && (
+        <Alert tone="info">
+          <strong>This ticket still needs a resolution.</strong> <Link to={`/inbox/${t.unresolved_brief.brief_id}`}>Brief #{t.unresolved_brief.brief_id}</Link> was{" "}
+          {t.unresolved_brief.status === "rejected" ? "rejected" : "sent for revision"}
+          {t.unresolved_brief.decided_by ? ` by ${t.unresolved_brief.decided_by}` : ""}
+          {t.unresolved_brief.comment ? `: “${t.unresolved_brief.comment}”` : "."} That declined the AI proposal, not the repair. Draft a new resolution brief below.
+        </Alert>
+      )}
+
+      <ChargeWarning notice={t.charge_notice} />
 
       <div className="summary-strip mb">
         <div>
@@ -146,12 +161,9 @@ export function TicketDetailPage() {
           <Card title="Deterministic policy result" subtitle="Computed in code from stored records. AI never decides the outcome." className="mb">
             {ev ? <PolicyResult ev={ev} /> : <p className="muted">Not checked yet. Run the policy check.</p>}
           </Card>
-          <Card title="Decision Briefs" subtitle="AI-drafted resolution options for human review" className="mb">
-            <EmptyState icon={Bot} title="No briefs yet">
-              The AI Maintenance Exception Resolver (next implementation group) will draft briefs here. It explains exceptions; it cannot change the
-              policy result or approve anything.
-            </EmptyState>
-          </Card>
+          <TicketApproval ticket={t} onChanged={reload} />
+          <DepositCharges ticket={t} onChanged={reload} />
+          <TicketBriefs ticket={t} />
           <Card title="Policy check history">
             {t.policy_evaluations.length === 0 ? (
               <p className="muted" style={{ margin: 0 }}>
@@ -190,8 +202,8 @@ export function TicketDetailPage() {
                   </dd>
                   <dt>Repair deductible</dt>
                   <dd>{t.lease.repair_deductible_cents === null ? <span className="text-warning">Not verified</span> : formatCents(t.lease.repair_deductible_cents)}</dd>
-                  <dt>Deposit remaining</dt>
-                  <dd>{t.lease.remaining_deposit_cents === null ? <span className="text-warning">No deposit recorded</span> : formatCents(t.lease.remaining_deposit_cents)}</dd>
+                  <dt>Security deposit</dt>
+                  <dd>{t.lease.deposit === null ? <span className="text-warning">No deposit recorded</span> : depositText(t.lease.deposit)}</dd>
                   <dt>Source</dt>
                   <dd className="small">{t.lease.source_doc_name}</dd>
                 </dl>
@@ -205,5 +217,57 @@ export function TicketDetailPage() {
         </aside>
       </div>
     </>
+  );
+}
+
+function TicketBriefs({ ticket }: { ticket: TicketDetail }) {
+  const { can } = useAuth();
+  const navigate = useNavigate();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const generate = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      navigate(`/inbox/${(await briefsApi.generate("maintenance", ticket.ticket_id)).brief_id}`);
+    } catch (e) {
+      setError(errorMessage(e));
+      setBusy(false);
+    }
+  };
+  const flagged = ticket.status === "flagged";
+  return (
+    <Card
+      title="Decision Briefs"
+      subtitle="AI-drafted resolution options for human review. The agent explains exceptions; it cannot change the result or approve."
+      className="mb"
+      actions={
+        can("briefs.generate") &&
+        flagged && (
+          <button className="btn btn-secondary btn-sm" onClick={() => void generate()} disabled={busy}>
+            {busy ? <LoaderCircle size={14} className="spin" aria-hidden /> : <Bot size={14} aria-hidden />} Draft resolution brief
+          </button>
+        )
+      }
+    >
+      {error && <Alert tone="error">{error}</Alert>}
+      {busy && <p className="small muted">The agent is reading the ticket, lease and ledger…</p>}
+      {ticket.decision_briefs.length === 0 ? (
+        <p className="muted small" style={{ margin: 0 }}>
+          {flagged ? "No brief yet." : "Briefs are drafted for tickets the policy engine flags."}
+        </p>
+      ) : (
+        <ul className="plain-list compact">
+          {ticket.decision_briefs.map((b) => (
+            <li key={b.brief_id}>
+              <Link to={`/inbox/${b.brief_id}`}>#{b.brief_id}</Link> {b.title}
+              <span className="list-meta">
+                <BriefStatusBadge status={b.status} />
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </Card>
   );
 }

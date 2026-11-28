@@ -12,7 +12,8 @@
     "ingest": "tsx src/extraction/cli.ts",
     "make-pdf": "tsx scripts/makeSamplePdf.ts",
     "test": "vitest run",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "eval": "tsx eval/evalSuite.ts"
   },
   "dependencies": {
     "@google/genai": "^3.6.1",

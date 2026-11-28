@@ -4,12 +4,13 @@ import { z } from "zod";
 import type { DB } from "../db/connection.js";
 import * as repo from "../db/repo.js";
 import type { LlmCall } from "../extraction/extractor.js";
-import { ingestLeaseDocument } from "../extraction/ingest.js";
+import { auditedIngest } from "../services/leaseIngest.js";
 import { ClauseType } from "../extraction/leaseSchema.js";
 import { runTicketPolicyCheck } from "../services/policyService.js";
 import { requirePermission } from "../auth/middleware.js";
 import { ApiError, notFound, parseOr400 } from "./errors.js";
 import { leaseDetail, leaseListItem } from "./leaseViews.js";
+import { audit, humanActor } from "../services/audit.js";
 import * as records from "../services/records.js";
 import { ticketDetail, ticketListItem } from "./ticketViews.js";
 
@@ -74,7 +75,7 @@ export function createRouter(db: DB, deps: { llm: () => LlmCall }): Router {
   r.post("/leases/ingest", requirePermission("records.write"), upload.single("file"), async (req, res) => {
     if (!req.file) throw new ApiError(400, "FILE_REQUIRED", 'Upload the lease as multipart/form-data field "file" (.pdf or .txt)');
     const docName = req.file.originalname.replace(/[^\w.\- ]+/g, "_");
-    const result = await ingestLeaseDocument(db, { docName, bytes: req.file.buffer }, deps.llm());
+    const result = await auditedIngest(db, { docName, bytes: req.file.buffer }, deps.llm(), humanActor(req.auth!.user), "api");
     const lease = repo.getLeaseRow(db, result.lease_id)!;
     res.status(201).json({
       data: {
@@ -132,15 +133,17 @@ export function createRouter(db: DB, deps: { llm: () => LlmCall }): Router {
       technician_quote_amount_cents: body.technician_quote_amount_cents,
       proposed_tenant_charge_cents: body.proposed_tenant_charge_cents ?? null,
     });
+    const actor = humanActor(req.auth!.user);
+    audit(db, { event_type: "ticket_created", actor, subject: { type: "ticket", id: ticketId }, payload: { ...body, issue_summary_untrusted: body.issue_summary, issue_summary: undefined } });
     // UC3: every new ticket is immediately checked by the deterministic engine.
-    const evaluation = runTicketPolicyCheck(db, ticketId);
+    const evaluation = runTicketPolicyCheck(db, ticketId, { triggeredBy: actor });
     res.status(201).json({ data: { ticket: repo.getTicket(db, ticketId), policy: evaluation } });
   });
 
   r.post("/tickets/:id/policy-check", requirePermission("policy.run"), (req, res) => {
     const id = parseOr400(IntId, req.params.id, "ticket id");
     if (!repo.getTicket(db, id)) throw notFound(`Ticket ${id}`);
-    res.json({ data: runTicketPolicyCheck(db, id) });
+    res.json({ data: runTicketPolicyCheck(db, id, { triggeredBy: humanActor(req.auth!.user) }) });
   });
 
   r.get("/tickets/:id/policy-evaluations", (req, res) => {

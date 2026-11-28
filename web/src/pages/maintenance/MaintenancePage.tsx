@@ -113,6 +113,11 @@ export function MaintenancePage() {
                     </td>
                     <td>
                       <TicketStatusBadge status={t.status} />
+                      {t.unresolved_brief && (
+                        <div className="text-warning small">
+                          Brief {t.unresolved_brief.status === "rejected" ? "rejected" : "sent for revision"} · needs a resolution
+                        </div>
+                      )}
                     </td>
                   </tr>
                 ))}

@@ -8,7 +8,10 @@ import { LeasesPage } from "./pages/leases/LeasesPage";
 import { LoginPage } from "./pages/LoginPage";
 import { MaintenancePage } from "./pages/maintenance/MaintenancePage";
 import { TicketDetailPage } from "./pages/maintenance/TicketDetailPage";
-import { ModulePage, NotFoundPage } from "./pages/ModulePage";
+import { AuditPage } from "./pages/audit/AuditPage";
+import { BriefDetailPage } from "./pages/inbox/BriefDetailPage";
+import { InboxPage } from "./pages/inbox/InboxPage";
+import { NotFoundPage } from "./pages/ModulePage";
 import { PaymentsPage } from "./pages/payments/PaymentsPage";
 import { PropertiesPage } from "./pages/properties/PropertiesPage";
 import { UnitDetailPage } from "./pages/properties/UnitDetailPage";
@@ -39,9 +42,9 @@ export function App() {
             <Route path="maintenance" element={<MaintenancePage />} />
             <Route path="maintenance/:id" element={<TicketDetailPage />} />
             <Route path="payments" element={<PaymentsPage />} />
-            {/* Built in later groups (Decision Inbox: D, Audit Trail: E). */}
-            <Route path="inbox/*" element={<ModulePage />} />
-            <Route path="audit/*" element={<ModulePage />} />
+            <Route path="inbox" element={<InboxPage />} />
+            <Route path="inbox/:id" element={<BriefDetailPage />} />
+            <Route path="audit" element={<AuditPage />} />
             <Route path="settings" element={<SettingsPage />} />
             <Route path="*" element={<NotFoundPage />} />
           </Route>

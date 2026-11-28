@@ -24,7 +24,9 @@ export interface LeaseSummary {
   created_at: string;
   lease_state: "active" | "expired" | "upcoming" | "unknown";
   days_until_end: number | null;
+  /** Available = held - collected - reserved. */
   remaining_deposit_cents: number | null;
+  deposit: { held_cents: number; collected_cents: number; reserved_cents: number; available_cents: number } | null;
   flags: string[];
   gaps: DataGap[];
   unit: { unit_id: string; property_name: string; unit_number: string } | null;

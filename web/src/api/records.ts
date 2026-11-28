@@ -31,6 +31,8 @@ export interface Ticket {
   unit?: { unit_id: string; property_name: string; unit_number: string } | null;
   tenant?: { tenant_id: string; name: string } | null;
   latest?: LatestEvaluation | null;
+  /** Set when the ticket is still flagged and its latest brief was rejected or sent for revision. */
+  unresolved_brief?: { brief_id: number; status: "rejected" | "revision_requested"; comment: string | null; decided_at: string | null; decided_by: string | null } | null;
 }
 export interface PolicyException { code: string; message: string; values: Record<string, number | null> }
 export interface RuleTrace { rule: string; passed: boolean; detail: string }
@@ -43,7 +45,12 @@ export interface Evaluation {
     threeWay: { tenantShareCents?: number | null; ownerShareCents?: number | null; [k: string]: unknown };
   };
 }
-export interface TicketDetail extends Ticket { latest_policy_evaluation: Evaluation | null; policy_evaluations: Evaluation[]; lease: LeaseSummary | null; decision_briefs: unknown[] }
+export interface DepositReservation {
+  reservation_id: number; lease_id: number; ticket_id: number; amount_cents: number; required_tier: "AUTO_APPROVE" | "PROPERTY_MANAGER" | "REGIONAL_DIRECTOR";
+  status: "reserved" | "collected" | "released"; reserved_at: string; reserved_by_name: string; resolved_at: string | null; resolved_by_name: string | null; release_reason: string | null;
+}
+export interface TicketDecision { decision: "approve" | "reject"; approved_amount_cents: number | null; comment: string | null; decided_by: string; decided_at: string }
+export interface TicketDetail extends Ticket { charge_notice: { proposed_charge_cents: number; deductible_share_cents: number; difference_cents: number } | null; direct_decision: TicketDecision | null;deposit_reservations: DepositReservation[];latest_policy_evaluation: Evaluation | null; policy_evaluations: Evaluation[]; lease: LeaseSummary | null;decision_briefs: { brief_id: number; status: string; priority: string; required_approver: string; title: string; created_at: string }[] }
 
 export interface LedgerSummary {
   as_of_month: string; total_outstanding_cents: number; current_month_due_cents: number; current_month_paid_cents: number; entry_count: number;
@@ -64,7 +71,9 @@ export interface Dashboard {
   };
   activity: {
     uploads: { document_id: number; kind: string; doc_name: string; status: string; lease_id: number | null; rows_imported: number | null; uploaded_at: string; uploaded_by_name: string | null }[];
-    new_tickets: TicketRef[]; briefs: unknown[]; approvals: unknown[];
+    new_tickets: TicketRef[];
+    briefs: { brief_id: number; brief_type: string; title: string; status: string; priority: string; required_approver: string; created_at: string }[];
+    approvals: { brief_id: number; brief_type: string; title: string; status: string; selected_option: string | null; decided_at: string; decided_by: string }[];
   };
 }
 export interface LeaseRef { lease_id: number; tenant_name: string | null; unit_label: string | null; end_date: string | null; days_until_end: number | null; gap_count: number }
@@ -112,6 +121,9 @@ export const recordsApi = {
   createTicket: (body: { unit_id: string; tenant_id: string | null; issue_summary: string; work_order_amount_cents: number; technician_quote_amount_cents: number; proposed_tenant_charge_cents: number | null }) =>
     data(api<{ data: { ticket: Ticket; policy: unknown } }>("/tickets", { method: "POST", json: body })),
   runPolicy: (id: number) => data(api<{ data: unknown }>(`/tickets/${id}/policy-check`, { method: "POST" })),
+  decideTicket: (id: number, body: { decision: "approve" | "reject"; comment: string | null }) => data(api<{ data: unknown }>(`/tickets/${id}/decision`, { method: "POST", json: body })),
+  collectCharge:(reservationId: number) => data(api<{ data: DepositReservation }>(`/deposit-reservations/${reservationId}/collect`, { method: "POST", json: {} })),
+  releaseCharge: (reservationId: number, reason: string) => data(api<{ data: DepositReservation }>(`/deposit-reservations/${reservationId}/release`, { method: "POST", json: { reason } })),
 };
 
 /** Multipart import call (preview or commit). Mapping is sent as a JSON field. */

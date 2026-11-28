@@ -7,7 +7,8 @@ import type { DB } from "../db/connection.js";
 import * as repo from "../db/repo.js";
 import type { LlmCall } from "../extraction/extractor.js";
 import { correctLeaseField, linkLease, listCorrections } from "../services/leaseCorrections.js";
-import { getDocument, leaseSourcePages, listDocuments, retryExtraction, uploadLeaseDocument } from "../services/leaseDocuments.js";
+import { audit, humanActor, type Actor } from "../services/audit.js";
+import { getDocument, leaseSourcePages, listDocuments, retryExtraction, uploadLeaseDocument, type UploadOutcome } from "../services/leaseDocuments.js";
 import type { DocumentStore } from "../storage/documentStore.js";
 import { ApiError, notFound, parseOr400 } from "./errors.js";
 import { leaseDetail } from "./leaseViews.js";
@@ -59,13 +60,44 @@ export function createLeaseRouter(db: DB, deps: { llm: () => LlmCall; store: () 
     if (!req.file) throw new ApiError(400, "FILE_REQUIRED", 'Upload the lease as multipart/form-data field "file" (.pdf or .txt)');
     const originalName = Buffer.from(req.file.originalname, "latin1").toString("utf8");
     const out = await uploadLeaseDocument(db, deps.store(), { originalName, bytes: req.file.buffer, mimeType: req.file.mimetype }, req.auth!.user.user_id, deps.llm());
+    const actor = humanActor(req.auth!.user);
+    audit(db, {
+      event_type: "document_uploaded",
+      actor,
+      subject: { type: "document", id: out.document.document_id },
+      payload: { doc_name: out.document.doc_name, sha256: out.document.sha256, size_bytes: out.document.size_bytes, storage_key: out.document.storage_key },
+    });
+    auditExtraction(out, actor);
     res.status(201).json({ data: { document: out.document, lease: out.document.lease_id ? leaseDetail(db, out.document.lease_id) : null } });
   });
 
   r.post("/documents/:id/retry", write, async (req, res) => {
     const out = await retryExtraction(db, deps.store(), parseOr400(IntId, req.params.id, "document id"), deps.llm());
+    auditExtraction(out, humanActor(req.auth!.user), true);
     res.json({ data: { document: out.document, lease: out.document.lease_id ? leaseDetail(db, out.document.lease_id) : null } });
   });
+
+  /** Extraction runs (the LLM step plus deterministic verification) are audited with their outcome. */
+  function auditExtraction(out: UploadOutcome, actor: Actor, retry = false) {
+    const d = out.document;
+    audit(db, {
+      event_type: d.status === "failed" ? "extraction_failed" : "extraction_completed",
+      actor,
+      subject: d.lease_id ? { type: "lease", id: d.lease_id } : { type: "document", id: d.document_id },
+      payload: {
+        document_id: d.document_id,
+        doc_name: d.doc_name,
+        retry,
+        status: d.status,
+        error_code: d.error_code,
+        lease_id: d.lease_id,
+        model: d.lease_id ? (repo.getLeaseRow(db, d.lease_id)?.extraction_model ?? null) : null,
+        attempts: out.ingest?.attempts ?? [],
+        gaps: out.ingest?.gaps.map((g) => `${g.field}:${g.status}`) ?? [],
+        linked: out.ingest?.linked ?? null,
+      },
+    });
+  }
 
   // --- lease review --------------------------------------------------------------------
   r.get("/leases/:id/source", (req, res) => {
@@ -86,6 +118,13 @@ export function createLeaseRouter(db: DB, deps: { llm: () => LlmCall; store: () 
     const id = parseOr400(IntId, req.params.id, "lease id");
     const body = parseOr400(CorrectionBody, req.body, "correction");
     correctLeaseField(db, id, String(req.params.field), body.value, body.reason, req.auth!.user.user_id);
+    const c = listCorrections(db, id)[0]!;
+    audit(db, {
+      event_type: "extraction_correction",
+      actor: humanActor(req.auth!.user),
+      subject: { type: "lease", id },
+      payload: { correction_id: c.correction_id, field: c.field_name, previous_value: c.previous_value_text, previous_status: c.previous_status, new_value: c.new_value_text, new_status: c.new_status, reason: c.reason },
+    });
     res.json({ data: leaseDetail(db, id) });
   });
 
@@ -93,6 +132,7 @@ export function createLeaseRouter(db: DB, deps: { llm: () => LlmCall; store: () 
     const id = parseOr400(IntId, req.params.id, "lease id");
     const body = parseOr400(LinkBody, req.body, "link");
     linkLease(db, id, body.unit_id, body.tenant_id, body.reason ?? "", req.auth!.user.user_id);
+    audit(db, { event_type: "lease_linked", actor: humanActor(req.auth!.user), subject: { type: "lease", id }, payload: { unit_id: body.unit_id, tenant_id: body.tenant_id, reason: body.reason ?? null } });
     res.json({ data: leaseDetail(db, id) });
   });
 

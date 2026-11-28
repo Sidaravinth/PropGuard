@@ -214,8 +214,13 @@ export function LeaseDetailPage() {
           <div>{formatCents(lease.monthly_rent_cents)}</div>
         </div>
         <div>
-          <div className="summary-label">Deposit remaining</div>
+          <div className="summary-label">Deposit available</div>
           <div>{lease.remaining_deposit_cents === null ? <span className="text-warning">No deposit recorded</span> : formatCents(lease.remaining_deposit_cents)}</div>
+          {lease.deposit && (
+            <div className="muted small">
+              {formatCents(lease.deposit.reserved_cents)} reserved · {formatCents(lease.deposit.collected_cents)} collected
+            </div>
+          )}
         </div>
         <div>
           <div className="summary-label">Source</div>

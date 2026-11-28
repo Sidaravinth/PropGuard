@@ -86,7 +86,7 @@ Two rules about which values are trusted:
    - unlinked unit or tenant
 
    Leases also carry state flags: `EXPIRED`, `IN_NOTICE_WINDOW` and `HAS_DATA_GAPS`.
-6. **Store.** One transaction holds the source document, lease, field sources, clauses and deposit-held entry. Re-ingesting the same filename replaces the previous version.
+6. **Store.** One transaction holds the source document, lease, field sources, clauses and deposit-held entry. Re-ingesting the same filename replaces the previous version. *(Day 2: refused when that lease has human history, such as corrections, briefs or deposit charges.)*
 
 The five sample leases and their edge cases:
 
@@ -178,7 +178,7 @@ The LLM step is replaced in unit tests by an injected test double (`tests/fixtur
 
 ## Known limitations and next steps
 
-- Re-ingesting a lease also drops that lease's deposit deductions (they cascade). That's fine for the prototype; production would version leases instead.
+- Re-ingesting a lease replaces it; production would version leases instead. *(Day 2: replacement is refused if it would drop deposit deductions or other human history.)*
 - Unit/tenant linking uses exact property name and unit number. Fuzzy matching would go to a review queue.
 - No OCR for scanned PDFs.
-- **Day 2** adds `decision_briefs` and `audit_logs` through an additive migration (`002_day2.sql`), then the read-only agent tools, the Decision Inbox UI and the eval suite.
+- **Day 2** adds `decision_briefs` and `audit_logs` through additive migrations, then the read-only agent tools, the Decision Inbox UI and the eval suite. *(Done: migrations `002_auth.sql` to `007_block_replace.sql`; see [README.md](README.md).)*

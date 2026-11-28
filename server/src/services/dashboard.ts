@@ -96,9 +96,10 @@ export function dashboard(db: DB) {
         )
         .all(),
       new_tickets: [...tickets].sort((a, b) => b.ticket_id - a.ticket_id).slice(0, 5).map(ticketRef),
-      /** Decision Briefs and approvals arrive in Groups C and D. */
-      briefs: [] as unknown[],
-      approvals: [] as unknown[],
+      briefs: db.prepare("SELECT brief_id, brief_type, title, status, priority, required_approver, created_at FROM decision_briefs WHERE status != 'superseded' ORDER BY brief_id DESC LIMIT 5").all(),
+      approvals: db
+        .prepare("SELECT b.brief_id, b.brief_type, b.title, b.status, b.selected_option, b.decided_at, u.display_name AS decided_by FROM decision_briefs b JOIN users u ON u.user_id = b.decided_by WHERE b.decided_at IS NOT NULL ORDER BY b.decided_at DESC LIMIT 5")
+        .all(),
     },
   };
 }

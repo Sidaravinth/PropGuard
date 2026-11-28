@@ -1,7 +1,7 @@
 /**
  * Reset + seed the SAMPLE database (data/propguard-sample.db, or SEED_DB_PATH) for development and
  * evaluation. It never touches the live database (DB_PATH): normal operation is user-driven.
- *   npm run seed                 structured records + ingest all leases in data/leases via the LLM pipeline
+ *   npm run seed                 structured records + ingest the five assessment leases via the LLM pipeline
  *   npm run seed -- --no-ingest  structured records only (no API key needed)
  *
  * After leases are ingested, the deterministic policy check runs on every ticket so flagged tickets
@@ -15,7 +15,7 @@ import { ingestLeaseDocument } from "../extraction/ingest.js";
 import { runTicketPolicyCheck } from "../services/policyService.js";
 import { migrate, openDb, tx, type DB } from "./connection.js";
 import { insertTicket } from "./repo.js";
-import { LEDGER, TENANTS, TICKETS, UNITS } from "./seedData.js";
+import { LEDGER, SAMPLE_LEASES, TENANTS, TICKETS, UNITS } from "./seedData.js";
 
 export function seedStructured(db: DB): void {
   tx(db, () => {
@@ -46,8 +46,7 @@ async function main() {
 
   if (!skipIngest) {
     const llm = createGeminiLlmCall();
-    const files = fs.readdirSync(config.leasesDir).filter((f) => /\.(pdf|txt)$/i.test(f)).sort();
-    for (const file of files) {
+    for (const file of SAMPLE_LEASES) {
       const result = await ingestLeaseDocument(db, { docName: file, bytes: fs.readFileSync(path.join(config.leasesDir, file)) }, llm);
       const gapText = result.gaps.length ? result.gaps.map((g) => `${g.field}(${g.status})`).join(", ") : "none";
       console.log(`  ingested ${file} → lease #${result.lease_id} [${result.extraction_status}] tenant=${result.linked.tenant_id} gaps: ${gapText}`);

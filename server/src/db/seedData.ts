@@ -9,6 +9,18 @@ import type { NewTicket } from "./repo.js";
 
 const $ = (dollars: number) => Math.round(dollars * 100);
 
+/**
+ * The five assessment lease documents (data/leases/) that these records match. `npm run seed` ingests exactly
+ * these; other documents (data/demo/, uploads) are never part of the sample data.
+ */
+export const SAMPLE_LEASES = [
+  "lease_maple_101_sharma.txt",
+  "lease_maple_102_chen.txt",
+  "lease_oakwood_301_patel.pdf",
+  "lease_riverside_201_rodriguez.txt",
+  "lease_riverside_202_oconnor.txt",
+] as const;
+
 export const UNITS = [
   { unit_id: "U101", property_name: "Maple Court Apartments", unit_number: "101", base_rent_cents: $(1500) },
   { unit_id: "U102", property_name: "Maple Court Apartments", unit_number: "102", base_rent_cents: $(1650) },

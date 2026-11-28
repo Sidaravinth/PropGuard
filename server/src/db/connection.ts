@@ -36,8 +36,22 @@ export function migrate(db: DB): string[] {
   return applied;
 }
 
-/** Run fn inside a transaction; rolls back on any thrown error. Not re-entrant. */
+let savepointSeq = 0;
+
+/** Run fn inside a transaction; rolls back on any thrown error. Nested calls use savepoints. */
 export function tx<T>(db: DB, fn: () => T): T {
+  if (db.isTransaction) {
+    const sp = `sp_${++savepointSeq}`;
+    db.exec(`SAVEPOINT ${sp}`);
+    try {
+      const result = fn();
+      db.exec(`RELEASE ${sp}`);
+      return result;
+    } catch (err) {
+      db.exec(`ROLLBACK TO ${sp}; RELEASE ${sp}`);
+      throw err;
+    }
+  }
   db.exec("BEGIN");
   try {
     const result = fn();

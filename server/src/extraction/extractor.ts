@@ -59,20 +59,53 @@ export function extractionJsonSchema(): Record<string, unknown> {
 }
 
 /** Rate limits (free tier) and server errors are worth waiting out. */
-const RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504]);
+const RETRYABLE_STATUS = new Set([408, 429, 500, 502, 503, 504]);
 const BACKOFF_MS = [5_000, 20_000, 40_000];
+const NETWORK_CODES = /^(ECONNRESET|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN|ENOTFOUND|EPIPE|UND_ERR_\w+)$/;
+
+export class LlmTimeoutError extends Error {
+  constructor(ms: number) {
+    super(`The model did not reply within ${ms / 1000} s`);
+    this.name = "LlmTimeoutError";
+  }
+}
+
+/** Worth trying again: our timeout, a dropped connection, a rate limit or a server error. Never a bad key or request. */
+export function isTransientLlmError(err: unknown): boolean {
+  if (err instanceof LlmTimeoutError) return true;
+  if (err instanceof ApiError) return RETRYABLE_STATUS.has(err.status);
+  const e = err as { name?: string; message?: string; cause?: { code?: string } } | null;
+  return NETWORK_CODES.test(e?.cause?.code ?? "") || (e?.name === "TypeError" && /fetch failed/i.test(e.message ?? ""));
+}
+
+/** One attempt with a hard time limit. The request is also cancelled, but we do not rely on that to return. */
+export async function withTimeout<T>(call: (signal: AbortSignal) => Promise<T>, ms: number): Promise<T> {
+  const controller = new AbortController();
+  let timer: NodeJS.Timeout | undefined;
+  const timedOut = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      reject(new LlmTimeoutError(ms));
+      controller.abort();
+    }, ms);
+  });
+  try {
+    return await Promise.race([call(controller.signal), timedOut]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 export async function withBackoff<T>(
   fn: () => Promise<T>,
   sleep: (ms: number) => Promise<unknown> = (ms) => new Promise((r) => setTimeout(r, ms)),
+  maxRetries: number = config.llmMaxRetries,
 ): Promise<T> {
   for (let i = 0; ; i++) {
     try {
       return await fn();
     } catch (err) {
-      const delay = BACKOFF_MS[i];
-      if (delay === undefined || !(err instanceof ApiError) || !RETRYABLE_STATUS.has(err.status)) throw err;
-      await sleep(delay);
+      if (i >= maxRetries || !isTransientLlmError(err)) throw err;
+      await sleep(BACKOFF_MS[Math.min(i, BACKOFF_MS.length - 1)]!);
     }
   }
 }
@@ -94,11 +127,15 @@ export function createGeminiLlmCall(model: string = config.extractionModel): Llm
     if (!apiKey) throw new LlmUnavailableError("GEMINI_API_KEY is not set");
     const ai = (client ??= new GoogleGenAI({ apiKey }));
     const response = await withBackoff(() =>
-      ai.models.generateContent({
-        model,
-        contents: messages.map((m) => ({ role: m.role === "assistant" ? "model" : "user", parts: [{ text: m.content }] })),
-        config: { systemInstruction: system, responseMimeType: "application/json", responseJsonSchema, maxOutputTokens: 16000 },
-      }),
+      withTimeout(
+        (abortSignal) =>
+          ai.models.generateContent({
+            model,
+            contents: messages.map((m) => ({ role: m.role === "assistant" ? "model" : "user", parts: [{ text: m.content }] })),
+            config: { systemInstruction: system, responseMimeType: "application/json", responseJsonSchema, maxOutputTokens: 16000, abortSignal },
+          }),
+        config.extractionTimeoutMs,
+      ),
     );
     return {
       text: response.text ?? "",

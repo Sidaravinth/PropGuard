@@ -1,0 +1,65 @@
+{
+  "_about": "Ground truth for the 5 sample leases, read by hand from the documents. Money in dollars. status: 'extracted' = value must match; 'missing' = the document does not state it (must be flagged, value must stay empty); 'needs_review' = the document is ambiguous/contradictory (must be flagged, value must not be trusted).",
+  "leases": [
+    {
+      "file": "lease_maple_101_sharma.txt",
+      "tenant_name": "Priya Sharma",
+      "fields": {
+        "start_date": { "status": "extracted", "value": "2026-01-16" },
+        "end_date": { "status": "extracted", "value": "2027-01-15" },
+        "monthly_rent": { "status": "extracted", "value": 1500 },
+        "security_deposit": { "status": "extracted", "value": 1500 },
+        "notice_period_days": { "status": "extracted", "value": 30 },
+        "repair_deductible": { "status": "extracted", "value": 100 }
+      }
+    },
+    {
+      "file": "lease_maple_102_chen.txt",
+      "tenant_name": "Marcus Chen",
+      "fields": {
+        "start_date": { "status": "extracted", "value": "2026-03-01" },
+        "end_date": { "status": "extracted", "value": "2027-02-28" },
+        "monthly_rent": { "status": "extracted", "value": 1650 },
+        "security_deposit": { "status": "extracted", "value": 2000 },
+        "notice_period_days": { "status": "extracted", "value": 45 },
+        "repair_deductible": { "status": "extracted", "value": 250 }
+      }
+    },
+    {
+      "file": "lease_oakwood_301_patel.pdf",
+      "tenant_name": "Aisha Patel",
+      "fields": {
+        "start_date": { "status": "extracted", "value": "2026-02-01" },
+        "end_date": { "status": "extracted", "value": "2027-01-31" },
+        "monthly_rent": { "status": "needs_review", "value": null, "why": "numerals $1,800.00 contradict the words 'One Thousand Eight Hundred Fifty Dollars'" },
+        "security_deposit": { "status": "extracted", "value": 1800 },
+        "notice_period_days": { "status": "extracted", "value": 45 },
+        "repair_deductible": { "status": "extracted", "value": 75 }
+      }
+    },
+    {
+      "file": "lease_riverside_201_rodriguez.txt",
+      "tenant_name": "Elena Rodriguez",
+      "fields": {
+        "start_date": { "status": "extracted", "value": "2026-06-01" },
+        "end_date": { "status": "extracted", "value": "2027-05-31" },
+        "monthly_rent": { "status": "extracted", "value": 2100 },
+        "security_deposit": { "status": "missing", "value": null, "why": "the agreement has no security deposit clause" },
+        "notice_period_days": { "status": "extracted", "value": 60 },
+        "repair_deductible": { "status": "extracted", "value": 150 }
+      }
+    },
+    {
+      "file": "lease_riverside_202_oconnor.txt",
+      "tenant_name": "James O'Connor",
+      "fields": {
+        "start_date": { "status": "extracted", "value": "2025-09-01" },
+        "end_date": { "status": "extracted", "value": "2026-08-31" },
+        "monthly_rent": { "status": "extracted", "value": 1950 },
+        "security_deposit": { "status": "extracted", "value": 1950 },
+        "notice_period_days": { "status": "extracted", "value": 60 },
+        "repair_deductible": { "status": "extracted", "value": 200 }
+      }
+    }
+  ]
+}

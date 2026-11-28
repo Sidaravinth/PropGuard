@@ -4,6 +4,7 @@ import { z } from "zod";
 import { AuthError } from "../auth/authService.js";
 import { StoredFileMissingError } from "../storage/documentStore.js";
 import { UnsupportedDocumentError } from "../extraction/documentText.js";
+import { LeaseHasHistoryError } from "../extraction/ingest.js";
 import { LlmUnavailableError } from "../extraction/extractor.js";
 import { PolicyInputError } from "../policy/policyEngine.js";
 import { NotFoundError } from "../services/policyService.js";
@@ -40,6 +41,7 @@ export const errorHandler: ErrorRequestHandler = (err, _req, res, _next) => {
   else if (err instanceof AuthError) e = new ApiError(AUTH_STATUS[err.code], err.code, err.message);
   else if (err instanceof StoredFileMissingError) e = new ApiError(410, "FILE_MISSING", "The original file is missing from document storage");
   else if (err instanceof NotFoundError) e = new ApiError(404, "NOT_FOUND", err.message);
+  else if (err instanceof LeaseHasHistoryError) e = new ApiError(409, "LEASE_HAS_HISTORY", err.message, { lease_id: err.leaseId, reasons: err.reasons });
   else if (err instanceof UnsupportedDocumentError) e = new ApiError(422, "UNSUPPORTED_DOCUMENT", err.message);
   else if (err instanceof PolicyInputError) e = new ApiError(422, "POLICY_INPUT_INVALID", err.message);
   else if (err instanceof multer.MulterError) e = new ApiError(400, "UPLOAD_ERROR", err.message);

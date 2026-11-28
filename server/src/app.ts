@@ -2,7 +2,9 @@ import fs from "node:fs";
 import path from "node:path";
 import express from "express";
 import swaggerUi from "swagger-ui-express";
+import { createGeminiAgentLlm, type AgentLlm } from "./agent/llm.js";
 import { createAuthRouter } from "./api/authRoutes.js";
+import { createBriefRouter } from "./api/briefRoutes.js";
 import { createLeaseRouter } from "./api/leaseRoutes.js";
 import { createRecordsRouter } from "./api/recordsRoutes.js";
 import { config } from "./config.js";
@@ -19,6 +21,8 @@ export interface AppDeps {
   db: DB;
   /** Factory so the LLM client is only created when an ingest actually happens. */
   llm?: () => LlmCall;
+  /** Factory for the agent model (tool calling + structured drafting). Tests inject a scripted double. */
+  agentLlm?: () => AgentLlm;
   /** Injectable for tests (clock, bcrypt cost); defaults to one built from config. */
   auth?: AuthService;
   /** Built frontend (web/dist). When present it is served at / with SPA fallback. */
@@ -27,7 +31,9 @@ export interface AppDeps {
   store?: DocumentStore;
 }
 
-export function createApp({ db, llm, auth = new AuthService(db), webDist, store }: AppDeps) {
+export function createApp({ db, llm, agentLlm, auth = new AuthService(db), webDist, store }: AppDeps) {
+  let defaultAgentLlm: AgentLlm | null = null;
+  const getAgentLlm = agentLlm ?? (() => (defaultAgentLlm ??= createGeminiAgentLlm()));
   const app = express();
   let defaultLlm: LlmCall | null = null;
   const getLlm = llm ?? (() => (defaultLlm ??= createGeminiLlmCall()));
@@ -53,6 +59,7 @@ export function createApp({ db, llm, auth = new AuthService(db), webDist, store 
   app.use("/api", createRouter(db, { llm: getLlm }));
   app.use("/api", createLeaseRouter(db, { llm: getLlm, store: getStore }));
   app.use("/api", createRecordsRouter(db, { store: getStore }));
+  app.use("/api", createBriefRouter(db, { agentLlm: getAgentLlm }));
 
   if (webDist && fs.existsSync(path.join(webDist, "index.html"))) {
     app.use(express.static(webDist, { index: false }));

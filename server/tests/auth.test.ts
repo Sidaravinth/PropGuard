@@ -15,13 +15,16 @@ let clock: number;
 let auth: AuthService;
 let llm: LlmCall & { calls: number };
 const now = () => new Date(clock);
+// The server clock is injected, but the test client expires cookies against the real clock,
+// so the injected clock must start at the real time.
+const START = Math.floor(Date.now() / 1000) * 1000;
 const makeApp = () => createApp({ db, llm: () => llm, auth });
 
 beforeEach(() => {
   db = openDb(":memory:");
   migrate(db);
   seedStructured(db);
-  clock = Date.parse("2026-11-27T09:00:00Z");
+  clock = START;
   auth = testAuth(db, { now, sessionTtlHours: 8, sessionIdleMinutes: 60 });
   llm = scriptedLlm([JSON.stringify(sharmaExtraction())]);
 });
@@ -133,7 +136,7 @@ describe("login and sessions", () => {
     const pm = await signedIn(makeApp(), "pm");
     for (let i = 0; i < 10; i++) {
       clock += 50 * 60_000; // keep it under the idle timeout
-      if (clock - Date.parse("2026-11-27T09:00:00Z") < 8 * 3_600_000) await pm.get("/api/units").expect(200);
+      if (clock - START < 8 * 3_600_000) await pm.get("/api/units").expect(200);
     }
     const r = await pm.get("/api/units").expect(401);
     expect(r.body.error.code).toBe("UNAUTHENTICATED");

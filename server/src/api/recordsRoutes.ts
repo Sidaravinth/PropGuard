@@ -1,12 +1,14 @@
 /** Day 2 Group B: properties, units, tenants, payment ledger, spreadsheet imports, dashboard. */
-import { Router } from "express";
+import { Router, type Request } from "express";
 import multer from "multer";
 import { z } from "zod";
 import { requirePermission } from "../auth/middleware.js";
-import type { DB } from "../db/connection.js";
+import { tx, type DB } from "../db/connection.js";
+import * as repo from "../db/repo.js";
 import { dashboard } from "../services/dashboard.js";
 import { commitImport, previewImport, type ImportKind, type Mapping } from "../services/imports.js";
-import { addLedgerEntry, listLedger, ledgerSummary, updateLedgerEntry } from "../services/ledger.js";
+import { audit, humanActor } from "../services/audit.js";
+import { addLedgerEntry, getEntry, listLedger, ledgerSummary, updateLedgerEntry } from "../services/ledger.js";
 import * as records from "../services/records.js";
 import type { DocumentStore } from "../storage/documentStore.js";
 import { ApiError, notFound, parseOr400 } from "./errors.js";
@@ -52,6 +54,26 @@ export function createRecordsRouter(db: DB, deps: { store: () => DocumentStore }
   const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024, files: 1 } });
   r.use(requirePermission("records.read"));
 
+  // Record edits can change which lease, ledger and unit the policy checks use, so each one is audited in the
+  // same transaction as the change. These entries are permanent and can include tenant contact details.
+  type RecordType = "property" | "unit" | "tenant";
+  const auditedCreate = <T extends object>(req: Request, type: RecordType, idKey: keyof T, create: () => T): T =>
+    tx(db, () => {
+      const record = create();
+      audit(db, { event_type: `${type}_created`, actor: humanActor(req.auth!.user), subject: { type, id: record[idKey] as string | number }, payload: { record } });
+      return record;
+    });
+  const auditedUpdate = <T extends object>(req: Request, type: RecordType, id: string | number, read: () => object | undefined, update: () => T): T =>
+    tx(db, () => {
+      const before = { ...read() } as Record<string, unknown>;
+      const record = update();
+      const after = { ...read() } as Record<string, unknown>;
+      const changes = Object.fromEntries(Object.keys(after).filter((k) => after[k] !== before[k]).map((k) => [k, { from: before[k], to: after[k] }]));
+      // Saving a form without changing anything is not an event.
+      if (Object.keys(changes).length) audit(db, { event_type: `${type}_updated`, actor: humanActor(req.auth!.user), subject: { type, id }, payload: { changes } });
+      return record;
+    });
+
   // --- dashboard -------------------------------------------------------------------------
   r.get("/dashboard", (_req, res) => {
     res.json({ data: dashboard(db) });
@@ -68,26 +90,35 @@ export function createRecordsRouter(db: DB, deps: { store: () => DocumentStore }
     res.json({ data: { ...p, units: records.listUnitsDetailed(db, { property_id: id }) } });
   });
   r.post("/properties", write, (req, res) => {
-    res.status(201).json({ data: records.createProperty(db, parseOr400(PropertyBody, req.body, "property")) });
+    const body = parseOr400(PropertyBody, req.body, "property");
+    res.status(201).json({ data: auditedCreate(req, "property", "property_id", () => records.createProperty(db, body)) });
   });
   r.patch("/properties/:id", write, (req, res) => {
-    res.json({ data: records.updateProperty(db, parseOr400(IntId, req.params.id, "property id"), parseOr400(PropertyPatch, req.body, "property")) });
+    const id = parseOr400(IntId, req.params.id, "property id");
+    const body = parseOr400(PropertyPatch, req.body, "property");
+    res.json({ data: auditedUpdate(req, "property", id, () => records.getProperty(db, id), () => records.updateProperty(db, id, body)) });
   });
 
   // --- units ------------------------------------------------------------------------------
   r.post("/units", write, (req, res) => {
-    res.status(201).json({ data: records.createUnit(db, parseOr400(UnitBody, req.body, "unit")) });
+    const body = parseOr400(UnitBody, req.body, "unit");
+    res.status(201).json({ data: auditedCreate(req, "unit", "unit_id", () => records.createUnit(db, body)) });
   });
   r.patch("/units/:id", write, (req, res) => {
-    res.json({ data: records.updateUnit(db, req.params.id as string, parseOr400(UnitPatch, req.body, "unit")) });
+    const id = req.params.id as string;
+    const body = parseOr400(UnitPatch, req.body, "unit");
+    res.json({ data: auditedUpdate(req, "unit", id, () => repo.getUnit(db, id), () => records.updateUnit(db, id, body)) });
   });
 
   // --- tenants ----------------------------------------------------------------------------
   r.post("/tenants", write, (req, res) => {
-    res.status(201).json({ data: records.createTenant(db, parseOr400(TenantBody, req.body, "tenant")) });
+    const body = parseOr400(TenantBody, req.body, "tenant");
+    res.status(201).json({ data: auditedCreate(req, "tenant", "tenant_id", () => records.createTenant(db, body)) });
   });
   r.patch("/tenants/:id", write, (req, res) => {
-    res.json({ data: records.updateTenant(db, req.params.id as string, parseOr400(TenantPatch, req.body, "tenant")) });
+    const id = req.params.id as string;
+    const body = parseOr400(TenantPatch, req.body, "tenant");
+    res.json({ data: auditedUpdate(req, "tenant", id, () => repo.getTenant(db, id), () => records.updateTenant(db, id, body)) });
   });
 
   // --- payment ledger ---------------------------------------------------------------------
@@ -103,10 +134,17 @@ export function createRecordsRouter(db: DB, deps: { store: () => DocumentStore }
     res.json({ data: ledgerSummary(db) });
   });
   r.post("/ledger", write, (req, res) => {
-    res.status(201).json({ data: addLedgerEntry(db, parseOr400(LedgerBody, req.body, "ledger entry")) });
+    const entry = addLedgerEntry(db, parseOr400(LedgerBody, req.body, "ledger entry"));
+    audit(db, { event_type: "ledger_entry_added", actor: humanActor(req.auth!.user), subject: { type: "tenant", id: entry.tenant_id }, payload: { ...entry } });
+    res.status(201).json({ data: entry });
   });
   r.patch("/ledger/:id", write, (req, res) => {
-    res.json({ data: updateLedgerEntry(db, parseOr400(IntId, req.params.id, "entry id"), parseOr400(LedgerPatch, req.body, "ledger entry")) });
+    const id = parseOr400(IntId, req.params.id, "entry id");
+    const body = parseOr400(LedgerPatch, req.body, "ledger entry");
+    const before = getEntry(db, id);
+    const entry = updateLedgerEntry(db, id, body);
+    audit(db, { event_type: "ledger_entry_updated", actor: humanActor(req.auth!.user), subject: { type: "tenant", id: entry.tenant_id }, payload: { entry_id: id, before, after: entry } });
+    res.json({ data: entry });
   });
 
   // --- spreadsheet imports (multipart: file, optional mapping JSON) --------------------------------
@@ -135,7 +173,14 @@ export function createRecordsRouter(db: DB, deps: { store: () => DocumentStore }
   r.post("/imports/:kind/commit", write, upload.single("file"), async (req, res) => {
     const { kind, file, mapping } = readImport(req as never);
     if (!mapping) throw new ApiError(400, "MAPPING_REQUIRED", "Send the confirmed column mapping with the commit");
-    res.status(201).json({ data: await commitImport(db, deps.store(), kind, file, mapping, req.auth!.user.user_id) });
+    const result = await commitImport(db, deps.store(), kind, file, mapping, req.auth!.user.user_id);
+    audit(db, {
+      event_type: "import_completed",
+      actor: humanActor(req.auth!.user),
+      subject: { type: "import", id: result.document_id },
+      payload: { kind, doc_name: result.doc_name, mapping, imported: result.imported, skipped: result.skipped, created_ids: result.created_ids, skipped_rows: result.skipped_rows },
+    });
+    res.status(201).json({ data: result });
   });
 
   return r;

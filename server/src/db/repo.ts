@@ -103,17 +103,37 @@ export function getClauses(db: DB, leaseId: number, type?: string): ClauseRow[] 
     : all<ClauseRow>(db, "SELECT * FROM lease_clauses WHERE lease_id = ? ORDER BY clause_id", leaseId);
 }
 
-/** Remaining deposit = held - deductions. null when no deposit was ever recorded for the lease. */
-export function remainingDepositCents(db: DB, leaseId: number): number | null {
-  const r = one<{ held: number | null; deducted: number | null }>(
+/**
+ * Deposit position of a lease, or null when no deposit was ever recorded. "collected" is every deduction in
+ * the ledger (a collected reservation is one of them); "reserved" is approved charges not yet collected.
+ * excludeTicketId leaves out that ticket's own reservation or collected charge, so a ticket is never
+ * checked against itself.
+ */
+export function depositPosition(db: DB, leaseId: number, excludeTicketId: number | null = null) {
+  const ledger = one<{ held: number | null; deducted: number | null }>(
     db,
     `SELECT SUM(CASE WHEN entry_type = 'held' THEN amount_cents END) AS held,
-            SUM(CASE WHEN entry_type = 'deduction' THEN amount_cents END) AS deducted
+            SUM(CASE WHEN entry_type = 'deduction' AND entry_id NOT IN
+                     (SELECT deduction_entry_id FROM deposit_reservations WHERE ticket_id IS ? AND deduction_entry_id IS NOT NULL)
+                THEN amount_cents END) AS deducted
        FROM deposit_ledger WHERE lease_id = ?`,
+    excludeTicketId,
     leaseId,
   )!;
-  if (r.held === null) return null;
-  return r.held - (r.deducted ?? 0);
+  if (ledger.held === null) return null;
+  const reserved = one<{ n: number }>(
+    db,
+    "SELECT COALESCE(SUM(amount_cents), 0) AS n FROM deposit_reservations WHERE lease_id = ? AND status = 'reserved' AND ticket_id IS NOT ?",
+    leaseId,
+    excludeTicketId,
+  )!.n;
+  const collected = ledger.deducted ?? 0;
+  return { held_cents: ledger.held, collected_cents: collected, reserved_cents: reserved, available_cents: Math.max(ledger.held - collected - reserved, 0) };
+}
+
+/** Deposit still available = held - collected - reserved. null when no deposit was ever recorded for the lease. */
+export function remainingDepositCents(db: DB, leaseId: number, excludeTicketId: number | null = null): number | null {
+  return depositPosition(db, leaseId, excludeTicketId)?.available_cents ?? null;
 }
 
 /** The lease governing a unit (and tenant, if known): the most recent by end date. */
@@ -165,9 +185,33 @@ export function leaseSummary(db: DB, lease: LeaseRow) {
     lease_state: state,
     days_until_end: lease.end_date ? daysUntil(lease.end_date) : null,
     remaining_deposit_cents: remainingDepositCents(db, lease.lease_id),
+    deposit: depositPosition(db, lease.lease_id),
     flags,
     gaps,
   };
+}
+
+/**
+ * Human work attached to the lease stored under this document name, which replacing the document would
+ * destroy or detach. Empty when there is no such lease, or nothing but its extraction.
+ */
+export function leaseHistory(db: DB, docName: string): { lease_id: number; reasons: string[] } | null {
+  const lease = one<{ lease_id: number }>(db, "SELECT lease_id FROM leases WHERE source_doc_name = ?", docName);
+  if (!lease) return null;
+  const has = (sql: string) => Boolean(db.prepare(sql).get(lease.lease_id));
+  const reasons = (
+    [
+      ["SELECT 1 FROM documents WHERE lease_id = ?", "it was uploaded through the application"],
+      ["SELECT 1 FROM lease_field_corrections WHERE lease_id = ?", "it has human corrections or links"],
+      ["SELECT 1 FROM decision_briefs WHERE lease_id = ?", "it has Decision Briefs"],
+      ["SELECT 1 FROM renewal_offers WHERE lease_id = ?", "it has an approved renewal offer"],
+      ["SELECT 1 FROM deposit_reservations WHERE lease_id = ?", "it has deposit reservations"],
+      ["SELECT 1 FROM deposit_ledger WHERE lease_id = ? AND entry_type = 'deduction'", "it has deposit deductions"],
+    ] as const
+  )
+    .filter(([sql]) => has(sql))
+    .map(([, reason]) => reason);
+  return reasons.length ? { lease_id: lease.lease_id, reasons } : null;
 }
 
 // --- tickets ------------------------------------------------------------------

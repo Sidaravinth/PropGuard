@@ -7,6 +7,12 @@ export const REPO_ROOT = path.resolve(here, "..", "..");
 
 dotenv.config({ path: path.join(REPO_ROOT, ".env"), quiet: true });
 
+/** A whole number from the environment; unset, empty or invalid values fall back to the default. */
+export function intFromEnv(name: string, fallback: number, min: number): number {
+  const n = Number(process.env[name]?.trim() || NaN);
+  return Number.isInteger(n) && n >= min ? n : fallback;
+}
+
 export const config = {
   port: Number(process.env.PORT ?? 3001),
   dbPath: process.env.DB_PATH ?? path.join(REPO_ROOT, "data", "propguard.db"),
@@ -16,6 +22,17 @@ export const config = {
   /** Development/evaluation database written by `npm run seed`; never the live database by default. */
   sampleDbPath: process.env.SEED_DB_PATH ?? path.join(REPO_ROOT, "data", "propguard-sample.db"),
   extractionModel: process.env.EXTRACTION_MODEL ?? "gemini-3.5-flash-lite",
+  /** Model for the agent workflows (tool calling + structured brief drafting). */
+  agentModel: process.env.AGENT_MODEL || "gemini-3.5-flash-lite",
+  /** Time limit for ONE model request attempt, and how many times a transient failure is retried. */
+  agentTimeoutMs: intFromEnv("AGENT_TIMEOUT_MS", 60_000, 1),
+  extractionTimeoutMs: intFromEnv("EXTRACTION_TIMEOUT_MS", 60_000, 1),
+  llmMaxRetries: intFromEnv("LLM_MAX_RETRIES", 2, 0),
+  /** MINIMAL | LOW | MEDIUM | HIGH. Higher is slower and costlier; LOW is enough for grounded drafting. */
+  agentThinkingLevel: (process.env.AGENT_THINKING_LEVEL ?? "LOW").toUpperCase(),
+  /** Automatic renewal briefs: on unless RENEWAL_AUTO_ENABLED=false; scans at startup and on this interval. */
+  renewalAutoEnabled: (process.env.RENEWAL_AUTO_ENABLED || "true").trim().toLowerCase() !== "false",
+  renewalScanIntervalMinutes: intFromEnv("RENEWAL_SCAN_INTERVAL_MINUTES", 60, 1),
   /** Max LLM attempts per document (1 initial + retries) before the doc is stored as needs_review. */
   extractionMaxAttempts: Number(process.env.EXTRACTION_MAX_ATTEMPTS ?? 3),
   auth: {
