@@ -1,11 +1,10 @@
 import type { ReactNode } from "react";
-import { Navigate, useLocation } from "react-router";
+import { Navigate } from "react-router";
 import { useAuth } from "./AuthContext";
 
-/** Protected route: unauthenticated visitors are sent to /login and returned here afterwards. */
+/** Protected route: unauthenticated visitors are sent to /login; after signing in they land on the dashboard. */
 export function RequireAuth({ children }: { children: ReactNode }) {
   const { status } = useAuth();
-  const location = useLocation();
   if (status === "loading") {
     return (
       <div className="fullscreen-center">
@@ -13,6 +12,6 @@ export function RequireAuth({ children }: { children: ReactNode }) {
       </div>
     );
   }
-  if (status === "signed-out") return <Navigate to="/login" replace state={{ from: location.pathname + location.search }} />;
+  if (status === "signed-out") return <Navigate to="/login" replace />;
   return <>{children}</>;
 }

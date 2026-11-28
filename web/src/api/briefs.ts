@@ -129,7 +129,15 @@ export interface BriefDetail extends Omit<BriefListItem, "summary" | "grounding_
 }
 
 export interface Candidates {
-  renewals: { lease_id: number; tenant_name: string | null; end_date: string | null; days_until_end: number | null; pending_brief_id: number | null }[];
+  renewals: {
+    lease_id: number;
+    tenant_name: string | null;
+    end_date: string | null;
+    days_until_end: number | null;
+    pending_brief_id: number | null;
+    /** The pending brief was drafted from incomplete lease data that has since been fixed. */
+    pending_brief_outdated: boolean;
+  }[];
   maintenance: { ticket_id: number; issue_summary: string; unit_id: string; pending_brief_id: number | null }[];
 }
 

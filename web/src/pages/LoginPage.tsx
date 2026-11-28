@@ -1,6 +1,6 @@
 import { Eye, EyeOff, LoaderCircle, ShieldCheck } from "lucide-react";
 import { useState, type FormEvent } from "react";
-import { Navigate, useLocation, useNavigate } from "react-router";
+import { Navigate, useNavigate } from "react-router";
 import { ApiRequestError } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
 import { Alert } from "../components/ui";
@@ -8,15 +8,14 @@ import { Alert } from "../components/ui";
 export function LoginPage() {
   const { status, login, signOutReason } = useAuth();
   const navigate = useNavigate();
-  const location = useLocation();
-  const from = (location.state as { from?: string } | null)?.from ?? "/";
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  if (status === "signed-in") return <Navigate to={from} replace />;
+  // Every sign-in lands on the dashboard, whatever page the user was on before.
+  if (status === "signed-in") return <Navigate to="/" replace />;
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
@@ -24,7 +23,7 @@ export function LoginPage() {
     setBusy(true);
     try {
       await login(email, password);
-      navigate(from, { replace: true });
+      navigate("/", { replace: true });
     } catch (err) {
       setError(err instanceof ApiRequestError ? err.message : "Could not reach the server. Is the API running?");
       setPassword("");

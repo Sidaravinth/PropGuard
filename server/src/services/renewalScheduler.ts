@@ -1,14 +1,14 @@
 /**
  * Automatic renewal identification: every lease cycle that enters its renewal window gets a Decision Brief,
  * without anyone clicking a button. The scan only drafts. It never decides, and it never touches a cycle
- * that already has a brief, so a rejected or revision-requested cycle stays as the human left it.
+ * that a person has decided, so a rejected or revision-requested cycle stays as the human left it.
+ * A pending brief drafted from incomplete lease data is redrafted once the lease has been fixed.
  */
 import type { AgentLlm } from "../agent/llm.js";
 import { ApiError } from "../api/errors.js";
 import type { DB } from "../db/connection.js";
 import * as repo from "../db/repo.js";
-import { generateBrief, renewalCandidates } from "./briefs.js";
-import { renewalCycleHasBrief } from "./approvalGuards.js";
+import { automaticBlock, generateBrief, renewalCandidates } from "./briefs.js";
 
 export interface ScanResult {
   created: { lease_id: number; brief_id: number }[];
@@ -22,7 +22,7 @@ export async function scanRenewals(db: DB, llm: AgentLlm): Promise<ScanResult> {
   const result: ScanResult = { created: [], skipped: 0, failed: [], stopped: false };
   for (const c of renewalCandidates(db)) {
     const cycle = repo.getLeaseRow(db, c.lease_id)?.end_date;
-    if (!cycle || renewalCycleHasBrief(db, c.lease_id, cycle)) {
+    if (!cycle || automaticBlock(db, c.lease_id, cycle)) {
       result.skipped++;
       continue;
     }
@@ -44,6 +44,19 @@ export async function scanRenewals(db: DB, llm: AgentLlm): Promise<ScanResult> {
   return result;
 }
 
+/** Delay before a scan requested by a lease change, so a burst of corrections triggers one scan. */
+const NUDGE_DELAY_MS = 3_000;
+let nudge: (() => void) | null = null;
+
+/**
+ * Ask the running scheduler to scan soon instead of at its next interval: called after a lease is
+ * corrected or linked, so a brief waiting on that fix is redrafted right away. Does nothing when no
+ * scheduler is running (tests, or automatic renewals turned off).
+ */
+export function requestRenewalScan(): void {
+  nudge?.();
+}
+
 /**
  * Scan once right away (without delaying startup) and then on an interval. Errors are logged, never thrown.
  * Returns a function that stops the schedule.
@@ -51,8 +64,12 @@ export async function scanRenewals(db: DB, llm: AgentLlm): Promise<ScanResult> {
 export function startRenewalScheduler(db: DB, llm: AgentLlm, opts: { intervalMinutes: number; log?: (line: string) => void }): () => void {
   const log = opts.log ?? console.log;
   let running = false;
+  let again = false;
   const run = async () => {
-    if (running) return; // a slow scan is never overlapped by the next one
+    if (running) {
+      again = true; // never overlap a slow scan; run once more when it ends
+      return;
+    }
     running = true;
     try {
       const r = await scanRenewals(db, llm);
@@ -64,12 +81,27 @@ export function startRenewalScheduler(db: DB, llm: AgentLlm, opts: { intervalMin
       log(`Renewal scan failed: ${(err as Error).message}`);
     } finally {
       running = false;
+      if (again) {
+        again = false;
+        void run();
+      }
     }
   };
+  let pendingNudge: ReturnType<typeof setTimeout> | null = null;
+  const onNudge = () => {
+    if (pendingNudge) clearTimeout(pendingNudge);
+    pendingNudge = setTimeout(() => {
+      pendingNudge = null;
+      void run();
+    }, NUDGE_DELAY_MS);
+  };
+  nudge = onNudge;
   const first = setTimeout(() => void run(), 0);
   const timer = setInterval(() => void run(), opts.intervalMinutes * 60_000);
   return () => {
     clearTimeout(first);
     clearInterval(timer);
+    if (pendingNudge) clearTimeout(pendingNudge);
+    if (nudge === onNudge) nudge = null;
   };
 }

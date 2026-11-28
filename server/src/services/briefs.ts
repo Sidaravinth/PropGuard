@@ -14,7 +14,7 @@ import { renderDeep } from "../agent/grounding.js";
 import type { AgentLlm } from "../agent/llm.js";
 import type { ToolCallLog } from "../agent/runner.js";
 import { NotEligibleError, runMaintenanceWorkflow, runRenewalWorkflow, type WorkflowResult } from "../agent/workflows.js";
-import { isRenewalCandidate } from "../policy/renewalPolicy.js";
+import { isRenewalCandidate, renewalPlan } from "../policy/renewalPolicy.js";
 import { agentActor, audit, humanActor, SYSTEM, type Actor } from "./audit.js";
 import { closedReason, isRenewalCycleApproved, renewalCycleHasBrief } from "./approvalGuards.js";
 import { chargeDiscrepancy } from "../agent/chargeNotice.js";
@@ -130,13 +130,35 @@ const generating = new WeakMap<DB, Set<string>>();
 export const RENEWAL_SCHEDULER: Actor = { type: "system", id: "renewal-scheduler" };
 
 /**
- * An automatic run may only fill a gap: never a cycle that already has a brief, whether it is pending or
- * a human has decided it (approved, rejected or revision requested).
+ * A pending renewal brief is outdated when it was drafted while the lease's source data was missing or no
+ * tenant was linked (so it has no prices and cannot be approved), and the lease has since been completed:
+ * every renewal input is now verified and a tenant is linked. Redrafting it is the only way forward.
  */
-function automaticBlock(db: DB, leaseId: number, cycle: string | null) {
-  return cycle && renewalCycleHasBrief(db, leaseId, cycle)
-    ? { code: "CYCLE_HAS_BRIEF", message: `Lease ${leaseId} already has a brief for the term ending ${cycle}.` }
-    : null;
+export function isOutdatedRenewalBrief(db: DB, b: BriefRow | undefined): boolean {
+  if (!b || b.brief_type !== "renewal" || b.status !== "pending" || b.needs_review !== 1 || b.lease_id === null) return false;
+  const lease = repo.getLeaseRow(db, b.lease_id);
+  return Boolean(lease?.tenant_id) && renewalPlan(lease!).missing.length === 0;
+}
+
+/** Whether a person has decided any brief for this lease cycle (approved, rejected or revision requested). */
+function cycleHasDecidedBrief(db: DB, leaseId: number, cycle: string): boolean {
+  return Boolean(
+    db
+      .prepare("SELECT 1 FROM decision_briefs WHERE brief_type = 'renewal' AND lease_id = ? AND renewal_cycle = ? AND status NOT IN ('pending', 'superseded')")
+      .get(leaseId, cycle),
+  );
+}
+
+/**
+ * An automatic run may only fill a gap: never a cycle that already has a brief, whether it is pending or
+ * a human has decided it (approved, rejected or revision requested). The one exception is a pending brief
+ * that is outdated (see above) in a cycle nobody has decided: the scan redrafts it once the lease is fixed.
+ */
+export function automaticBlock(db: DB, leaseId: number, cycle: string | null) {
+  if (!cycle || !renewalCycleHasBrief(db, leaseId, cycle)) return null;
+  const pending = pendingBriefFor(db, "renewal", leaseId);
+  if (pending?.renewal_cycle === cycle && isOutdatedRenewalBrief(db, pending) && !cycleHasDecidedBrief(db, leaseId, cycle)) return null;
+  return { code: "CYCLE_HAS_BRIEF", message: `Lease ${leaseId} already has a brief for the term ending ${cycle}.` };
 }
 
 /**
@@ -302,7 +324,8 @@ export function renewalCandidates(db: DB) {
     .filter(({ s }) => s.lease_state === "active" && isRenewalCandidate(s.days_until_end, s.notice_period_days))
     // Once this cycle's renewal is approved there is nothing left to decide.
     .filter(({ lease }) => !(lease.end_date && isRenewalCycleApproved(db, lease.lease_id, lease.end_date)))
-    .map(({ lease, s }) => ({
+    .map(({ lease, s }) => ({ lease, s, pending: pendingBriefFor(db, "renewal", lease.lease_id) }))
+    .map(({ lease, s, pending }) => ({
       lease_id: lease.lease_id,
       tenant_id: lease.tenant_id,
       tenant_name: lease.tenant_id ? repo.getTenant(db, lease.tenant_id)?.name ?? null : null,
@@ -310,7 +333,9 @@ export function renewalCandidates(db: DB) {
       end_date: lease.end_date,
       days_until_end: s.days_until_end,
       notice_period_days: lease.notice_period_days,
-      pending_brief_id: pendingBriefFor(db, "renewal", lease.lease_id)?.brief_id ?? null,
+      pending_brief_id: pending?.brief_id ?? null,
+      /** The pending brief was drafted from incomplete lease data that has since been fixed: redraft it. */
+      pending_brief_outdated: isOutdatedRenewalBrief(db, pending),
     }));
 }
 
@@ -322,9 +347,15 @@ export function maintenanceCandidates(db: DB) {
   }[]).map((t) => ({ ...t, pending_brief_id: pendingBriefFor(db, "maintenance", t.ticket_id)?.brief_id ?? null }));
 }
 
-/** Run a workflow for every candidate that has no pending brief yet. Failures are reported per item. */
+/**
+ * Run a workflow for every candidate that has no pending brief yet, or whose pending renewal brief is
+ * outdated (it is superseded by the new one). Failures are reported per item.
+ */
 export async function runBatch(db: DB, llm: AgentLlm, type: BriefType, user: PublicUser) {
-  const items = type === "renewal" ? renewalCandidates(db).map((c) => ({ id: c.lease_id, pending: c.pending_brief_id })) : maintenanceCandidates(db).map((c) => ({ id: c.ticket_id, pending: c.pending_brief_id }));
+  const items =
+    type === "renewal"
+      ? renewalCandidates(db).map((c) => ({ id: c.lease_id, pending: c.pending_brief_outdated ? null : c.pending_brief_id }))
+      : maintenanceCandidates(db).map((c) => ({ id: c.ticket_id, pending: c.pending_brief_id }));
   const results: { subject_id: number; brief_id?: number; skipped?: string; error?: string }[] = [];
   for (const it of items) {
     if (it.pending) {

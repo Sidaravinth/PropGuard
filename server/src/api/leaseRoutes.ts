@@ -13,6 +13,7 @@ import type { DocumentStore } from "../storage/documentStore.js";
 import { ApiError, notFound, parseOr400 } from "./errors.js";
 import { leaseDetail } from "./leaseViews.js";
 import { askLeaseQuestion, clearLeaseConversation, MAX_QUESTION_LENGTH, qaHistory } from "../services/leaseQa.js";
+import { requestRenewalScan } from "../services/renewalScheduler.js";
 
 const IntId = z.coerce.number().int().positive();
 /** Stored originals are served with their own type; anything else as plain text. */
@@ -189,6 +190,7 @@ export function createLeaseRouter(db: DB, deps: { llm: () => LlmCall; store: () 
       payload: { correction_id: c.correction_id, field: c.field_name, previous_value: c.previous_value_text, previous_status: c.previous_status, new_value: c.new_value_text, new_status: c.new_status, reason: c.reason },
     });
     auditUnitRentSync(db, rentSync, humanActor(req.auth!.user), `Matched to the corrected monthly rent of lease #${id}`);
+    requestRenewalScan(); // a renewal brief waiting on this fix is redrafted now, not at the next interval
     res.json({ data: leaseDetail(db, id) });
   });
 
@@ -198,6 +200,7 @@ export function createLeaseRouter(db: DB, deps: { llm: () => LlmCall; store: () 
     const rentSync = linkLease(db, id, body.unit_id, body.tenant_id, body.reason ?? "", req.auth!.user.user_id);
     audit(db, { event_type: "lease_linked", actor: humanActor(req.auth!.user), subject: { type: "lease", id }, payload: { unit_id: body.unit_id, tenant_id: body.tenant_id, reason: body.reason ?? null } });
     auditUnitRentSync(db, rentSync, humanActor(req.auth!.user), `Matched to the monthly rent of lease #${id} when it was linked`);
+    requestRenewalScan();
     res.json({ data: leaseDetail(db, id) });
   });
 

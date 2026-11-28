@@ -61,7 +61,7 @@ function AgentPanel({ onDone }: { onDone: () => void }) {
         <div>
           <div className="agent-head">
             <h3 className="section-title">Leases in their renewal window ({c?.renewals.length ?? 0})</h3>
-            <button className="btn btn-secondary btn-sm" disabled={!!busy || !c?.renewals.some((x) => !x.pending_brief_id)} onClick={() => void run("all-r", () => briefsApi.runAll("renewals"), summarise)}>
+            <button className="btn btn-secondary btn-sm" disabled={!!busy || !c?.renewals.some((x) => !x.pending_brief_id || x.pending_brief_outdated)} onClick={() => void run("all-r", () => briefsApi.runAll("renewals"), summarise)}>
               <Sparkles size={14} aria-hidden /> Run renewal workflow
             </button>
           </div>
@@ -74,7 +74,16 @@ function AgentPanel({ onDone }: { onDone: () => void }) {
                   ends {formatDate(r.end_date)} · {r.days_until_end} days
                 </span>
                 <span className="list-meta">
-                  {r.pending_brief_id ? (
+                  {r.pending_brief_id && r.pending_brief_outdated ? (
+                    <>
+                      <Link to={`/inbox/${r.pending_brief_id}`} title="Drafted before the lease data was complete">
+                        Brief #{r.pending_brief_id} (outdated)
+                      </Link>{" "}
+                      <button className="link-btn small" disabled={!!busy} onClick={() => void run(`r${r.lease_id}`, () => briefsApi.generate("renewals", r.lease_id), (b) => navigate(`/inbox/${(b as { brief_id: number }).brief_id}`))}>
+                        {busy === `r${r.lease_id}` ? <LoaderCircle size={13} className="spin" /> : <Sparkles size={13} />} Regenerate
+                      </button>
+                    </>
+                  ) : r.pending_brief_id ? (
                     <Link to={`/inbox/${r.pending_brief_id}`}>Brief #{r.pending_brief_id}</Link>
                   ) : (
                     <button className="link-btn small" disabled={!!busy} onClick={() => void run(`r${r.lease_id}`, () => briefsApi.generate("renewals", r.lease_id), (b) => navigate(`/inbox/${(b as { brief_id: number }).brief_id}`))}>

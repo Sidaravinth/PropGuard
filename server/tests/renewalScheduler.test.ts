@@ -80,6 +80,57 @@ describe("automatic renewal briefs", () => {
     expect(briefs()).toHaveLength(1);
   });
 
+  describe("a brief drafted from incomplete lease data", () => {
+    // The state a brief is left in when it was drafted before a field was verified or a tenant linked.
+    const markDraftedIncomplete = () => db.prepare("UPDATE decision_briefs SET needs_review = 1 WHERE brief_id = 1").run();
+
+    it("is redrafted by the scan once the lease is complete, superseding the old one", async () => {
+      await scanRenewals(db, agent());
+      markDraftedIncomplete();
+      expect((await scanRenewals(db, agent())).created).toEqual([{ lease_id: 1, brief_id: 2 }]);
+      expect(briefs()).toEqual([
+        { brief_id: 1, status: "superseded", renewal_cycle: "2027-01-15" },
+        { brief_id: 2, status: "pending", renewal_cycle: "2027-01-15" },
+      ]);
+      expect(await scanRenewals(db, agent())).toMatchObject({ created: [], skipped: 1 });
+      expect(verifyAuditChain(db).ok).toBe(true);
+    });
+
+    it("is left alone while the lease is still incomplete", async () => {
+      await scanRenewals(db, agent());
+      markDraftedIncomplete();
+      db.prepare("UPDATE leases SET tenant_id = NULL WHERE lease_id = 1").run();
+      expect(await scanRenewals(db, agent())).toMatchObject({ created: [], skipped: 1 });
+      db.prepare("UPDATE leases SET tenant_id = 'T001', monthly_rent_cents = NULL WHERE lease_id = 1").run();
+      expect(await scanRenewals(db, agent())).toMatchObject({ created: [], skipped: 1 });
+      expect(briefs()).toEqual([{ brief_id: 1, status: "pending", renewal_cycle: "2027-01-15" }]);
+    });
+
+    it("is never redrafted once a person has decided it", async () => {
+      await scanRenewals(db, agent());
+      markDraftedIncomplete();
+      await pm.post("/api/briefs/1/decision").send({ decision: "reject" }).expect(200);
+      expect(await scanRenewals(db, agent())).toMatchObject({ created: [], skipped: 1 });
+      expect(briefs()).toEqual([{ brief_id: 1, status: "rejected", renewal_cycle: "2027-01-15" }]);
+    });
+
+    it("is flagged as outdated to the inbox and redrafted by Run renewal workflow", async () => {
+      await scanRenewals(db, agent());
+      const before = (await pm.get("/api/agent/candidates").expect(200)).body.data.renewals[0];
+      expect(before).toMatchObject({ pending_brief_id: 1, pending_brief_outdated: false });
+      expect((await pm.post("/api/agent/renewals/run").expect(200)).body.data).toEqual([{ subject_id: 1, skipped: "pending brief #1 exists" }]);
+
+      markDraftedIncomplete();
+      expect((await pm.get("/api/agent/candidates").expect(200)).body.data.renewals[0]).toMatchObject({ pending_brief_id: 1, pending_brief_outdated: true });
+      routeLlm = agent();
+      expect((await pm.post("/api/agent/renewals/run").expect(200)).body.data).toEqual([{ subject_id: 1, brief_id: 2 }]);
+      expect(briefs()).toEqual([
+        { brief_id: 1, status: "superseded", renewal_cycle: "2027-01-15" },
+        { brief_id: 2, status: "pending", renewal_cycle: "2027-01-15" },
+      ]);
+    });
+  });
+
   it("starts a new cycle only when the lease's end date changes", async () => {
     await scanRenewals(db, agent());
     await pm.post("/api/briefs/1/decision").send({ decision: "reject" }).expect(200);

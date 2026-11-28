@@ -1,6 +1,6 @@
-import { ArrowLeft, CheckCircle2, ChevronDown, ChevronRight, CircleAlert, Database, FileText, LoaderCircle, ShieldCheck, XCircle } from "lucide-react";
+import { ArrowLeft, CheckCircle2, ChevronDown, ChevronRight, CircleAlert, Database, FileText, LoaderCircle, RefreshCw, ShieldCheck, XCircle } from "lucide-react";
 import { Fragment, useMemo, useState, type ReactNode } from "react";
-import { Link, useParams } from "react-router";
+import { Link, useNavigate, useParams } from "react-router";
 import { briefsApi, type BriefDetail, type Evidence, type Figure, type MaintenanceContent, type RenewalContent } from "../../api/briefs";
 import { useAuth } from "../../auth/AuthContext";
 import { ChargeWarning } from "../../components/ChargeWarning";
@@ -104,9 +104,11 @@ function EvidencePanel({ evidence, open, setOpen }: { evidence: Evidence[]; open
 }
 
 function DecisionControls({ brief, selected, onDecided }: { brief: BriefDetail; selected: string | null; onDecided: (b: BriefDetail) => void }) {
-  const { profile } = useAuth();
+  const { profile, can } = useAuth();
+  const navigate = useNavigate();
+  const [regenerating, setRegenerating] = useState(false);
   const [comment, setComment] = useState("");
-  const [confirm, setConfirm] = useState<"approve" | "reject" | "request_revision" | null>(null);
+  const [confirm, setConfirm] = useState<"approve" | "reject" | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const canTier = profile?.approvalTiers.includes(brief.required_approver) ?? false;
@@ -125,6 +127,20 @@ function DecisionControls({ brief, selected, onDecided }: { brief: BriefDetail; 
       setBusy(false);
     }
   };
+  /** Draft a fresh brief for the same lease or ticket; the server supersedes this pending one. */
+  const regenerate = async () => {
+    setRegenerating(true);
+    setError(null);
+    try {
+      const fresh =
+        brief.brief_type === "renewal" ? await briefsApi.generate("renewals", brief.lease_id!) : await briefsApi.generate("maintenance", brief.ticket_id!);
+      navigate(`/inbox/${fresh.brief_id}`);
+    } catch (e) {
+      setError(errorMessage(e));
+    } finally {
+      setRegenerating(false);
+    }
+  };
   const optionName = (k: string | null) =>
     k ? (brief.brief_type === "renewal" ? RENEWAL_NAMES[k] : `Option ${k}: ${(brief.content as MaintenanceContent).options.find((o) => o.key === k)?.title ?? ""}`) : "";
 
@@ -141,7 +157,7 @@ function DecisionControls({ brief, selected, onDecided }: { brief: BriefDetail; 
         <dt>Selected option</dt>
         <dd>{selected ? optionName(selected) : <span className="muted">Choose an option on the left</span>}</dd>
       </dl>
-      {!canTier && <Alert tone="info">This decision needs a {brief.required_approver === "REGIONAL_DIRECTOR" ? "Regional Director" : "Property Manager"}. You can reject it or request a revision.</Alert>}
+      {!canTier && <Alert tone="info">This decision needs a {brief.required_approver === "REGIONAL_DIRECTOR" ? "Regional Director" : "Property Manager"}. You can reject it.</Alert>}
       {blocked && <Alert tone="info">{blocked}</Alert>}
       <label className="field mb-sm">
         <span className="field-label">Comment (optional)</span>
@@ -151,16 +167,19 @@ function DecisionControls({ brief, selected, onDecided }: { brief: BriefDetail; 
         <button className="btn btn-primary" disabled={!selected || !canTier || !!blocked} onClick={() => setConfirm("approve")}>
           <CheckCircle2 size={16} aria-hidden /> Approve
         </button>
-        <button className="btn btn-secondary" onClick={() => setConfirm("request_revision")}>
-          Request revision
-        </button>
         <button className="btn btn-danger" onClick={() => setConfirm("reject")}>
           <XCircle size={16} aria-hidden /> Reject
         </button>
+        {can("briefs.generate") && (
+          <button className="btn btn-secondary" disabled={regenerating} onClick={() => void regenerate()} title="Draft a new brief from the current data; this one is superseded">
+            {regenerating ? <LoaderCircle size={16} className="spin" aria-hidden /> : <RefreshCw size={16} aria-hidden />} {regenerating ? "Regenerating…" : "Regenerate"}
+          </button>
+        )}
       </div>
+      {regenerating && <p className="small muted">The agent is calling tools and drafting. This can take a minute.</p>}
       {confirm && (
         <Modal
-          title={confirm === "approve" ? "Confirm approval" : confirm === "reject" ? "Reject this brief?" : "Request a revision?"}
+          title={confirm === "approve" ? "Confirm approval" : "Reject this brief?"}
           onClose={() => setConfirm(null)}
           footer={
             <>
